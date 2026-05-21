@@ -1,3 +1,5 @@
+<img src="docs/logo.png" alt="LumiGate" width="120">
+
 # LumiGate
 
 **Art-Net → DMX512 Gateway** based on ESP32 with a live web UI, WebSocket push, and manual DMX control via browser.
