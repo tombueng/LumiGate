@@ -1,5 +1,5 @@
 /*
- * Art-Net → DMX Gateway
+ * LumiGate — Art-Net → DMX Gateway
  * ESP32 + Waveshare RS485-Modul (Auto-Direction)
  *
  * Features:
@@ -230,12 +230,12 @@ static void handleRoot() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DMX Gateway</title>
+<title>LumiGate</title>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-mono text-sm">
 <nav class="bg-gray-900 border-b border-gray-800 px-4 py-3 flex flex-wrap items-center gap-4">
-  <span class="text-cyan-400 font-bold text-base">&#9728; DMX Gateway</span>
+  <span class="text-cyan-400 font-bold text-base">&#9728; LumiGate</span>
   <a href="/" class="text-cyan-400 border-b border-cyan-400 pb-0.5">Status</a>
   <a href="/config" class="text-gray-400 hover:text-cyan-400">Konfig</a>
   <a href="/reset"  class="text-gray-400 hover:text-cyan-400">Reset</a>
@@ -440,6 +440,12 @@ function sendCmd(obj){
 
 connect();
 </script>
+<footer class="text-center text-gray-700 text-xs py-4 mt-6 border-t border-gray-800">
+  &copy; 2025 <a href="https://github.com/tombueng" class="hover:text-gray-400 underline">tombueng</a>
+  &nbsp;&mdash;&nbsp;
+  <a href="https://github.com/tombueng/LumiGate" class="hover:text-gray-400 underline">LumiGate on GitHub</a>
+  &nbsp;&mdash;&nbsp;MIT License
+</footer>
 </body></html>
 )html";
 
@@ -456,7 +462,7 @@ static void handleConfigGet() {
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-mono text-sm">
 <nav class="bg-gray-900 border-b border-gray-800 px-4 py-3 flex flex-wrap items-center gap-4">
-  <span class="text-cyan-400 font-bold text-base">&#9728; DMX Gateway</span>
+  <span class="text-cyan-400 font-bold text-base">&#9728; LumiGate</span>
   <a href="/" class="text-gray-400 hover:text-cyan-400">Status</a>
   <a href="/config" class="text-cyan-400 border-b border-cyan-400">Konfig</a>
   <a href="/reset"  class="text-gray-400 hover:text-cyan-400">Reset</a>
@@ -489,6 +495,12 @@ static void handleConfigGet() {
 </button>
 </form>
 </div>
+<footer class="text-center text-gray-700 text-xs py-4 mt-6 border-t border-gray-800">
+  &copy; 2025 <a href="https://github.com/tombueng" class="hover:text-gray-400 underline">tombueng</a>
+  &nbsp;&mdash;&nbsp;
+  <a href="https://github.com/tombueng/LumiGate" class="hover:text-gray-400 underline">LumiGate on GitHub</a>
+  &nbsp;&mdash;&nbsp;MIT License
+</footer>
 </main></body></html>)html";
     http.send(200, "text/html", p);
 }
@@ -525,7 +537,7 @@ static void handleResetGet() {
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-mono text-sm">
 <nav class="bg-gray-900 border-b border-gray-800 px-4 py-3 flex flex-wrap items-center gap-4">
-  <span class="text-cyan-400 font-bold text-base">&#9728; DMX Gateway</span>
+  <span class="text-cyan-400 font-bold text-base">&#9728; LumiGate</span>
   <a href="/" class="text-gray-400 hover:text-cyan-400">Status</a>
   <a href="/config" class="text-gray-400 hover:text-cyan-400">Konfig</a>
   <a href="/reset"  class="text-cyan-400 border-b border-cyan-400">Reset</a>
@@ -542,6 +554,12 @@ Andere Einstellungen bleiben erhalten.</p>
 </button>
 </form>
 </div>
+<footer class="text-center text-gray-700 text-xs py-4 mt-6 border-t border-gray-800">
+  &copy; 2025 <a href="https://github.com/tombueng" class="hover:text-gray-400 underline">tombueng</a>
+  &nbsp;&mdash;&nbsp;
+  <a href="https://github.com/tombueng/LumiGate" class="hover:text-gray-400 underline">LumiGate on GitHub</a>
+  &nbsp;&mdash;&nbsp;MIT License
+</footer>
 </main></body></html>)html");
 }
 
@@ -617,7 +635,7 @@ static void initOTA() {
 void setup() {
     Serial.begin(115200);
     startMs = millis();
-    Serial.println("\n[BOOT] Art-Net DMX Gateway");
+    Serial.println("\n[BOOT] LumiGate — Art-Net DMX Gateway");
 
     loadConfig();
 
