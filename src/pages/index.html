@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LumiGate</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-mono text-sm">
+<nav class="bg-gray-900 border-b border-gray-800 px-4 py-3 flex flex-wrap items-center gap-4">
+  <img src="/logo.png" alt="LumiGate" class="h-8 w-8 rounded">
+  <a href="/" class="text-cyan-400 border-b border-cyan-400 pb-0.5">Status</a>
+  <a href="/config" class="text-gray-400 hover:text-cyan-400">Config</a>
+  <a href="/reset"  class="text-gray-400 hover:text-cyan-400">Reset</a>
+  <span class="ml-auto flex items-center gap-2">
+    <span id="ws-dot" class="w-2 h-2 rounded-full bg-red-500"></span>
+    <span id="ws-lbl" class="text-xs text-gray-500">Offline</span>
+  </span>
+</nav>
+<main class="p-4 max-w-5xl mx-auto space-y-4">
+
+<!-- Stats -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+  <div class="bg-gray-800 rounded-lg p-3">
+    <div class="text-xs text-gray-400 mb-1">Framerate</div>
+    <div id="fps" class="text-xl text-cyan-400">– fps</div>
+  </div>
+  <div class="bg-gray-800 rounded-lg p-3">
+    <div class="text-xs text-gray-400 mb-1">RSSI</div>
+    <div id="rssi" class="text-xl">–</div>
+  </div>
+  <div class="bg-gray-800 rounded-lg p-3">
+    <div class="text-xs text-gray-400 mb-1">Uptime</div>
+    <div id="up" class="text-xl text-gray-300">–</div>
+  </div>
+  <div class="bg-gray-800 rounded-lg p-3">
+    <div class="text-xs text-gray-400 mb-1">Heap free</div>
+    <div id="heap" class="text-xl text-gray-300">–</div>
+  </div>
+</div>
+
+<!-- Info -->
+<div class="bg-gray-800 rounded-lg p-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-400">
+  <span>SSID: <span class="text-gray-200">{{SSID}}</span></span>
+  <span>IP: <span class="text-gray-200">{{IP}}</span></span>
+  <span>Universe: <span class="text-gray-200">{{UNIVERSE}}</span></span>
+  <span>Hostname: <span class="text-gray-200">{{HOSTNAME}}.local</span></span>
+</div>
+
+<!-- Controls -->
+<div class="bg-gray-800 rounded-lg p-3 flex flex-wrap items-center gap-3">
+  <button id="btn-mode"
+    onclick="toggleMode()"
+    class="px-3 py-1.5 rounded text-xs font-bold bg-gray-700 hover:bg-gray-600 text-gray-200">
+    Art-Net active
+  </button>
+  <button onclick="sendCmd({type:'blackout'})"
+    class="px-3 py-1.5 rounded text-xs font-bold bg-red-900 hover:bg-red-800 text-red-200">
+    Blackout
+  </button>
+  <span id="sel-label" class="text-xs text-gray-400 ml-2"></span>
+  <div id="ch-ctrl" class="hidden flex items-center gap-2 w-full mt-2">
+    <span id="ch-name" class="w-16 text-xs text-gray-300"></span>
+    <input id="ch-slider" type="range" min="0" max="255" value="0"
+      oninput="onSlider(this.value)"
+      class="flex-1 accent-cyan-400">
+    <span id="ch-val" class="w-8 text-right text-cyan-400">0</span>
+  </div>
+</div>
+
+<!-- DMX Grid -->
+<div class="bg-gray-800 rounded-lg p-3">
+  <div class="text-xs text-gray-400 mb-2">DMX channels 1–512
+    <span class="text-gray-600">· click to edit</span>
+  </div>
+  <div id="grid" style="display:grid;grid-template-columns:repeat(32,1fr);border-top:1px solid #374151;border-left:1px solid #374151"></div>
+</div>
+
+</main>
+
+<script>
+const N=512, cells=[], vals=new Uint8Array(512);
+const grid=document.getElementById('grid');
+for(let i=1;i<=N;i++){
+  const d=document.createElement('div');
+  d.style.cssText=[
+    'height:28px','background:#111827','cursor:pointer',
+    'border-right:1px solid #374151','border-bottom:1px solid #374151',
+    'display:flex','flex-direction:column','align-items:center',
+    'justify-content:center','gap:1px','overflow:hidden','position:relative'
+  ].join(';');
+  const cn=document.createElement('span');
+  cn.textContent=i;
+  cn.style.cssText='font-size:6px;color:#6b7280;line-height:1;pointer-events:none;user-select:none';
+  const vl=document.createElement('span');
+  vl.textContent='0';
+  vl.style.cssText='font-size:7px;color:#9ca3af;line-height:1;pointer-events:none;user-select:none';
+  d.appendChild(cn); d.appendChild(vl);
+  d.dataset.ch=i;
+  d.addEventListener('click',()=>selectCh(i));
+  grid.appendChild(d);
+  cells.push({el:d,vl});
+}
+
+let manual=false, selCh=null;
+const slider=document.getElementById('ch-slider');
+const chVal =document.getElementById('ch-val');
+const chName=document.getElementById('ch-name');
+const chCtrl=document.getElementById('ch-ctrl');
+const btnMode=document.getElementById('btn-mode');
+
+function selectCh(i){
+  if(selCh) cells[selCh-1].el.style.outline='';
+  selCh=i;
+  cells[i-1].el.style.outline='2px solid #22d3ee';
+  chCtrl.classList.remove('hidden');
+  const v=vals[i-1];
+  slider.value=v; chVal.textContent=v;
+  chName.textContent='Ch '+i;
+}
+
+function onSlider(v){
+  chVal.textContent=v;
+  if(selCh) sendCmd({type:'set',ch:selCh,val:parseInt(v)});
+}
+
+function toggleMode(){
+  manual=!manual;
+  sendCmd({type:'mode',manual});
+  btnMode.textContent=manual?'Manual active':'Art-Net active';
+  btnMode.className=manual
+    ?'px-3 py-1.5 rounded text-xs font-bold bg-cyan-900 hover:bg-cyan-800 text-cyan-200'
+    :'px-3 py-1.5 rounded text-xs font-bold bg-gray-700 hover:bg-gray-600 text-gray-200';
+}
+
+let sock=null;
+function connect(){
+  sock=new WebSocket('ws://'+location.hostname+':81');
+  sock.binaryType='arraybuffer';
+  sock.onopen=()=>{
+    document.getElementById('ws-dot').className='w-2 h-2 rounded-full bg-green-400';
+    document.getElementById('ws-lbl').textContent='Live';
+  };
+  sock.onclose=()=>{
+    document.getElementById('ws-dot').className='w-2 h-2 rounded-full bg-red-500';
+    document.getElementById('ws-lbl').textContent='Offline';
+    setTimeout(connect,2000);
+  };
+  sock.onmessage=e=>{
+    if(!(e.data instanceof ArrayBuffer)) return;
+    const v=new DataView(e.data);
+    const fps =v.getUint16(0)/10;
+    const rssi=v.getInt16(2);
+    const heap=v.getUint32(4);
+    const upS =v.getUint32(8);
+    const ch  =new Uint8Array(e.data,12,512);
+    document.getElementById('fps').textContent=fps.toFixed(1)+' fps';
+    const rssiEl=document.getElementById('rssi');
+    rssiEl.textContent=rssi+' dBm';
+    rssiEl.className='text-xl '+(rssi>-70?'text-green-400':rssi>-85?'text-yellow-400':'text-red-400');
+    document.getElementById('heap').textContent=Math.round(heap/1024)+' KB';
+    const d=Math.floor(upS/86400),h=Math.floor((upS%86400)/3600),
+          m=Math.floor((upS%3600)/60),s=upS%60;
+    document.getElementById('up').textContent=
+      String(d).padStart(2,'0')+'d '+String(h).padStart(2,'0')+':'+
+      String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+    for(let i=0;i<512;i++){
+      const val=ch[i];
+      if(vals[i]===val) continue;
+      vals[i]=val;
+      const c=cells[i];
+      c.el.style.background=val>0?`rgba(34,211,238,${(val/255).toFixed(3)})`:'#111827';
+      c.vl.textContent=val;
+      c.vl.style.color=val>0?'#e5e7eb':'#6b7280';
+      if(selCh===i+1){slider.value=val;chVal.textContent=val;}
+    }
+  };
+}
+
+function sendCmd(obj){
+  if(sock&&sock.readyState===1) sock.send(JSON.stringify(obj));
+}
+connect();
+</script>
+<footer class="text-center text-gray-700 text-xs py-4 mt-6 border-t border-gray-800">
+  &copy; 2025 <a href="https://github.com/tombueng" class="hover:text-gray-400 underline">tombueng</a>
+  &nbsp;&mdash;&nbsp;
+  <a href="https://github.com/tombueng/LumiGate" class="hover:text-gray-400 underline">LumiGate on GitHub</a>
+  &nbsp;&mdash;&nbsp;MIT License
+</footer>
+</body></html>

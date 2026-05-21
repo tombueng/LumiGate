@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LumiGate – Reset</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-mono text-sm">
+<nav class="bg-gray-900 border-b border-gray-800 px-4 py-3 flex flex-wrap items-center gap-4">
+  <img src="/logo.png" alt="LumiGate" class="h-8 w-8 rounded">
+  <a href="/" class="text-gray-400 hover:text-cyan-400">Status</a>
+  <a href="/config" class="text-gray-400 hover:text-cyan-400">Config</a>
+  <a href="/reset"  class="text-cyan-400 border-b border-cyan-400">Reset</a>
+</nav>
+<main class="p-4 max-w-md mx-auto">
+<div class="bg-gray-800 rounded-lg p-5 space-y-4">
+<h2 class="text-red-400 font-bold">WiFi Reset</h2>
+<p class="text-gray-400 text-xs">Clears WiFi credentials and opens the config portal.
+Other settings are preserved.</p>
+<form method="POST" action="/reset">
+<button type="submit"
+  class="w-full py-2 rounded bg-red-700 hover:bg-red-600 text-white font-bold">
+  Reset now
+</button>
+</form>
+</div>
+<footer class="text-center text-gray-700 text-xs py-4 mt-6 border-t border-gray-800">
+  &copy; 2025 <a href="https://github.com/tombueng" class="hover:text-gray-400 underline">tombueng</a>
+  &nbsp;&mdash;&nbsp;
+  <a href="https://github.com/tombueng/LumiGate" class="hover:text-gray-400 underline">LumiGate on GitHub</a>
+  &nbsp;&mdash;&nbsp;MIT License
+</footer>
+</main></body></html>
