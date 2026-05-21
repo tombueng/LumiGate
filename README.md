@@ -180,6 +180,40 @@ The ESP32 DevKit is powered via its **Micro-USB port**. Any 5V USB power supply 
 - [PlatformIO](https://platformio.org/) with VS Code extension
 - ESP32 connected via USB (CH340 or CP2102)
 
+### Project Structure
+
+```
+LumiGate/
+├── src/
+│   ├── main.cpp          ← firmware logic only (~270 lines)
+│   ├── pages/            ← edit web UI here (plain HTML)
+│   │   ├── index.html
+│   │   ├── config.html
+│   │   ├── config_saved.html
+│   │   ├── reset.html
+│   │   └── reset_done.html
+│   ├── assets/           ← images served by the ESP32
+│   │   └── logo.png      ← 96×96 px, replaces itself on rebuild
+│   └── generated/        ← auto-created at build time, gitignored
+├── docs/                 ← documentation assets (README images)
+├── extra_scripts.py      ← PlatformIO pre-build hook
+└── platformio.ini
+```
+
+### How the build pipeline works
+
+Before every `pio run`, PlatformIO executes `extra_scripts.py`, which:
+
+1. Reads every `src/pages/*.html` file
+2. Reads every `src/assets/*.png` file
+3. Converts them to C `PROGMEM` arrays / string literals and writes them to `src/generated/*.h`
+4. `main.cpp` `#include`s those headers — the HTML and images become part of the firmware binary
+
+**To change the web UI**, edit the HTML files in `src/pages/` and rebuild — no C++ changes needed.  
+**To replace the logo**, drop a new 96×96 PNG into `src/assets/logo.png` and rebuild.
+
+Dynamic values (IP address, universe number, etc.) use `{{PLACEHOLDER}}` tokens in the HTML; `main.cpp` substitutes them at request time with `String::replace()`.
+
 ### First Flash (USB)
 
 ```bash
