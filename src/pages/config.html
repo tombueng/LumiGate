@@ -46,12 +46,75 @@ footer a:hover { color:var(--gh-text); }
   <!-- Art-Net + Device config form -->
   <form method="POST" action="/config">
     <div class="card mb-3">
-      <div class="card-header">Art-Net</div>
+      <div class="card-header">Protocol</div>
       <div class="card-body">
-        <label class="form-label text-secondary small mb-1">Universe <span class="text-muted">(0–15)</span></label>
-        <input class="form-control" type="number" name="universe" min="0" max="15" value="{{UNIVERSE}}">
+        <div class="mb-3">
+          <label class="form-label text-secondary small mb-1">Input protocol</label>
+          <select class="form-select" name="protocol" id="proto-sel">
+            <option value="0">Art-Net only</option>
+            <option value="1">sACN / E1.31 only</option>
+            <option value="2">Both (Art-Net + sACN)</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label text-secondary small mb-1">Universe</label>
+          <input class="form-control" type="number" name="universe" id="uni-inp"
+                 min="0" max="15" value="{{UNIVERSE}}">
+          <div class="form-text" id="uni-hint"></div>
+        </div>
       </div>
     </div>
+    <script>
+    (function(){
+      var sel = document.getElementById('proto-sel');
+      var inp = document.getElementById('uni-inp');
+      var hint = document.getElementById('uni-hint');
+      sel.value = '{{PROTOCOL}}';
+      function upd() {
+        var u = +inp.value, p = +sel.value;
+        var parts = [];
+        if (p !== 1) parts.push('Art-Net: universe ' + u);
+        if (p !== 0) parts.push('sACN: universe ' + (u + 1) + '  →  239.255.0.' + (u + 1));
+        hint.textContent = parts.join('  ·  ');
+      }
+      inp.addEventListener('input', upd);
+      sel.addEventListener('change', upd);
+      upd();
+    })();
+    </script>
+
+    <div class="card mb-3">
+      <div class="card-header">Status LED</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label text-secondary small mb-1">LED type</label>
+          <select class="form-select" name="ledtype" id="led-type">
+            <option value="0">Disabled</option>
+            <option value="1">Plain GPIO (active high)</option>
+            <option value="2">WS2812 RGB (NeoPixel)</option>
+          </select>
+          <div class="form-text">
+            WS2812: red blink = no WiFi &nbsp;&middot;&nbsp; amber blink = idle &nbsp;&middot;&nbsp; green = DMX active
+          </div>
+        </div>
+        <div id="led-pin-row">
+          <label class="form-label text-secondary small mb-1">GPIO pin</label>
+          <input class="form-control" type="number" name="ledpin" id="led-pin"
+                 min="-1" max="48" value="{{LED_PIN}}">
+          <div class="form-text">−1 to disable</div>
+        </div>
+      </div>
+    </div>
+    <script>
+    (function(){
+      var sel = document.getElementById('led-type');
+      var row = document.getElementById('led-pin-row');
+      sel.value = '{{LED_TYPE}}';
+      function upd(){ row.style.display = sel.value === '0' ? 'none' : ''; }
+      sel.addEventListener('change', upd);
+      upd();
+    })();
+    </script>
 
     <div class="card mb-3">
       <div class="card-header">Device</div>

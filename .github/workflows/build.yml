@@ -27,18 +27,26 @@ jobs:
       - name: Install PlatformIO
         run: pip install platformio
 
-      - name: Build firmware
-        run: pio run
+      - name: Build firmware (ESP32)
+        run: pio run -e esp32dev
+        env:
+          LUMIGATE_VERSION: "1.0.${{ github.run_number }}"
+
+      - name: Build firmware (ESP32-S3)
+        run: pio run -e esp32s3dev
         env:
           LUMIGATE_VERSION: "1.0.${{ github.run_number }}"
 
       - name: Collect binaries
         run: |
-          cp .pio/build/esp32dev/firmware.bin        firmware.bin
-          cp .pio/build/esp32dev/bootloader.bin      bootloader.bin
-          cp .pio/build/esp32dev/partitions.bin      partitions.bin
+          cp .pio/build/esp32dev/firmware.bin         firmware.bin
+          cp .pio/build/esp32dev/bootloader.bin        bootloader.bin
+          cp .pio/build/esp32dev/partitions.bin        partitions.bin
           cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
              boot_app0.bin
+          cp .pio/build/esp32s3dev/firmware.bin        firmware-esp32s3.bin
+          cp .pio/build/esp32s3dev/bootloader.bin      bootloader-esp32s3.bin
+          cp .pio/build/esp32s3dev/partitions.bin      partitions-esp32s3.bin
           echo "1.0.${{ github.run_number }}" > version.txt
 
       - name: Delete existing latest release
@@ -50,8 +58,14 @@ jobs:
         run: |
           gh release create latest \
             --title "v1.0.${{ github.run_number }} ($(date -u '+%Y-%m-%d %H:%M UTC'))" \
-            --notes "Version 1.0.${{ github.run_number }} — built from ${{ github.sha }}. Use \`flash.ps1\` to flash." \
+            --notes "Version 1.0.${{ github.run_number }} — built from ${{ github.sha }}.
+
+          Flash files:
+          - **ESP32** (WROOM-32, WROVER): \`firmware.bin\` + \`flash.ps1\`
+          - **ESP32-S3** (DevKitC-1): \`firmware-esp32s3.bin\`" \
             --prerelease \
-            firmware.bin bootloader.bin partitions.bin boot_app0.bin version.txt
+            firmware.bin bootloader.bin partitions.bin boot_app0.bin \
+            firmware-esp32s3.bin bootloader-esp32s3.bin partitions-esp32s3.bin \
+            version.txt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
