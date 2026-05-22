@@ -30,23 +30,20 @@ jobs:
       - name: Build firmware
         run: |
           pio run -e esp32dev
+          cp .pio/build/esp32dev/firmware.bin   firmware.bin
+          cp .pio/build/esp32dev/bootloader.bin bootloader.bin
+          cp .pio/build/esp32dev/partitions.bin partitions.bin
+
           pio run -e esp32s3dev
+          cp .pio/build/esp32s3dev/firmware.bin   firmware-esp32s3.bin
+          cp .pio/build/esp32s3dev/bootloader.bin bootloader-esp32s3.bin
+          cp .pio/build/esp32s3dev/partitions.bin partitions-esp32s3.bin
+
+          BOOT_APP0=$(find ~/.platformio/packages -name "boot_app0.bin" | head -1)
+          cp "$BOOT_APP0" boot_app0.bin
+          echo "1.0.${{ github.run_number }}" > version.txt
         env:
           LUMIGATE_VERSION: "1.0.${{ github.run_number }}"
-
-      - name: Collect binaries
-        run: |
-          echo "Build outputs:"
-          find .pio/build -name "firmware.bin" 2>/dev/null
-          BOOT_APP0=$(find ~/.platformio/packages -name "boot_app0.bin" 2>/dev/null | head -1)
-          cp .pio/build/esp32dev/firmware.bin         firmware.bin
-          cp .pio/build/esp32dev/bootloader.bin        bootloader.bin
-          cp .pio/build/esp32dev/partitions.bin        partitions.bin
-          cp "$BOOT_APP0"                              boot_app0.bin
-          cp .pio/build/esp32s3dev/firmware.bin        firmware-esp32s3.bin
-          cp .pio/build/esp32s3dev/bootloader.bin      bootloader-esp32s3.bin
-          cp .pio/build/esp32s3dev/partitions.bin      partitions-esp32s3.bin
-          echo "1.0.${{ github.run_number }}" > version.txt
 
       - name: Delete existing latest release
         run: gh release delete latest --yes 2>/dev/null || true
