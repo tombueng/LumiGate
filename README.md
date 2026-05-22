@@ -299,6 +299,11 @@ pio run --target upload
 ### OTA Updates (after first flash)
 
 - **From browser:** open `http://dmx-gateway.local/config` → Firmware Update section → upload a `.bin` file or click "Update from GitHub"
+
+| Downloading update | Back online |
+|---|---|
+| ![OTA progress](docs/screenshot-ota-progress.png) | ![After OTA](docs/screenshot-after-ota.png) |
+
 - **From IDE:** uncomment in `platformio.ini`:
 ```ini
 upload_protocol = espota
