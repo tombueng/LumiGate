@@ -2,8 +2,10 @@
 LumiGate pre-build script.
 Converts src/pages/*.html and src/assets/*.{png,css} into C PROGMEM headers
 under src/generated/ — runs at script-load time (before compilation).
+Also writes src/generated/version.h from the LUMIGATE_VERSION env var.
 """
 Import("env")
+import os
 import pathlib
 
 def escape_c(s: str) -> str:
@@ -35,11 +37,20 @@ def binary_to_header(path: pathlib.Path, out_dir: pathlib.Path, type_suffix: str
     out.write_text(h, encoding="utf-8")
     print(f"  [embed] {path.name} -> {out.name}  ({len(data)} bytes)")
 
+def generate_version(gen_dir: pathlib.Path):
+    version = os.environ.get("LUMIGATE_VERSION", "dev")
+    (gen_dir / "version.h").write_text(
+        f'static const char FIRMWARE_VERSION[] = "{version}";\n',
+        encoding="utf-8"
+    )
+    print(f"  [version] FIRMWARE_VERSION = {version}")
+
 def generate():
     root    = pathlib.Path(env.subst("$PROJECT_DIR"))
     gen_dir = root / "src" / "generated"
     gen_dir.mkdir(exist_ok=True)
     print("LumiGate: generating embedded assets...")
+    generate_version(gen_dir)
     for f in sorted((root / "src" / "pages").glob("*.html")):
         html_to_header(f, gen_dir)
     for f in sorted((root / "src" / "assets").glob("*.png")):

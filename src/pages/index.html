@@ -95,7 +95,7 @@ footer a:hover { color: var(--gh-text); }
     <img src="/logo.png" alt="LumiGate">
     <div class="brand-text">
       <div class="name">LumiGate</div>
-      <div class="sub">{{HOSTNAME}}.local &nbsp;&middot;&nbsp; {{IP}} &nbsp;&middot;&nbsp; Universe {{UNIVERSE}}</div>
+      <div class="sub">{{HOSTNAME}}.local &nbsp;&middot;&nbsp; {{IP}} &nbsp;&middot;&nbsp; Universe {{UNIVERSE}} &nbsp;&middot;&nbsp; v{{VERSION}}</div>
     </div>
   </a>
   <div class="nav-links">
@@ -105,6 +105,13 @@ footer a:hover { color: var(--gh-text); }
 </nav>
 
 <div class="container-fluid p-3">
+
+  <!-- Update banner -->
+  <div id="update-banner" class="d-flex align-items-center justify-content-between mb-3 px-3 py-2 rounded"
+       style="display:none!important;background:#2d2a00;border:1px solid #e3b341">
+    <span style="color:#e3b341;font-size:.85rem">&#8635;&nbsp; Firmware update available: <strong id="update-ver"></strong></span>
+    <a href="/config" class="btn btn-sm fw-semibold" style="background:#e3b341;color:#000;font-size:.78rem">Update</a>
+  </div>
 
   <!-- Stats -->
   <div class="row g-2 mb-3">
@@ -275,6 +282,14 @@ function connect() {
   };
 }
 connect();
+
+fetch('/version.json').then(function(r){ return r.json(); }).then(function(d){
+  if (d.update) {
+    document.getElementById('update-ver').textContent = d.latest;
+    var b = document.getElementById('update-banner');
+    b.style.cssText = 'display:flex!important;background:#2d2a00;border:1px solid #e3b341';
+  }
+}).catch(function(){});
 </script>
 </body>
 </html>

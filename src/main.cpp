@@ -14,12 +14,14 @@
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <Update.h>
 #include <ArtnetWifi.h>
 #include <esp_dmx.h>
 
 // Auto-generated asset headers (produced by extra_scripts.py before each build)
+#include "generated/version.h"
 #include "generated/index_html.h"
 #include "generated/config_html.h"
 #include "generated/config_saved_html.h"
@@ -69,8 +71,10 @@ static uint32_t startMs      = 0;
 static bool     dmxReady     = false;
 static bool     manualMode   = false;
 static uint32_t lastWsPush   = 0;
-static uint32_t lastArtNetMs   = 0;
+static uint32_t lastArtNetMs    = 0;
 static bool     pendingGithubOta = false;
+static String   latestVersion   = "";
+static bool     updateAvailable = false;
 
 // Binary WS frame: fps(2) rssi(2) heap(4) uptime(4) dmx(512) = 524 bytes
 static uint8_t wsBuf[524];
@@ -194,12 +198,24 @@ static void onArtDmx(uint16_t universe, uint16_t length, uint8_t, uint8_t* data)
 // ---------------------------------------------------------------------------
 // HTTP handlers
 // ---------------------------------------------------------------------------
+static void handleVersionJson() {
+    String j = "{\"current\":\"";
+    j += FIRMWARE_VERSION;
+    j += "\",\"latest\":\"";
+    j += latestVersion.length() > 0 ? latestVersion : String(FIRMWARE_VERSION);
+    j += "\",\"update\":";
+    j += updateAvailable ? "true" : "false";
+    j += "}";
+    http.send(200, "application/json", j);
+}
+
 static void handleRoot() {
     String p = FPSTR(INDEX_HTML);
     p.replace("{{SSID}}",     WiFi.SSID());
     p.replace("{{IP}}",       WiFi.localIP().toString());
     p.replace("{{UNIVERSE}}", String(cfg.universe));
     p.replace("{{HOSTNAME}}", cfg.hostname);
+    p.replace("{{VERSION}}",  FIRMWARE_VERSION);
     http.send(200, "text/html", p);
 }
 
@@ -227,6 +243,7 @@ static void handleConfigGet() {
     p.replace("{{UNIVERSE}}", String(cfg.universe));
     p.replace("{{HOSTNAME}}", cfg.hostname);
     p.replace("{{OTAPW}}",    cfg.otaPassword);
+    p.replace("{{VERSION}}",  FIRMWARE_VERSION);
     http.send(200, "text/html", p);
 }
 
@@ -263,6 +280,40 @@ static void handleLogo() {
 static void handleBootstrapCss() {
     http.sendHeader("Cache-Control", "max-age=604800");
     http.send_P(200, "text/css", (const char*)BOOTSTRAP_MIN_CSS, BOOTSTRAP_MIN_CSS_LEN);
+}
+
+// ---------------------------------------------------------------------------
+// Version check (runs once at startup in a FreeRTOS task)
+// ---------------------------------------------------------------------------
+static int parseBuild(const String& v) {
+    int dot = v.lastIndexOf('.');
+    return dot >= 0 ? v.substring(dot + 1).toInt() : 0;
+}
+
+static void checkForUpdate() {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http2;
+    http2.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    if (!http2.begin(client, "https://github.com/tombueng/LumiGate/releases/download/latest/version.txt")) return;
+    int code = http2.GET();
+    if (code == 200) {
+        String v = http2.getString();
+        v.trim();
+        if (v.length() > 0 && v.length() < 24) {
+            latestVersion  = v;
+            updateAvailable = parseBuild(v) > parseBuild(String(FIRMWARE_VERSION));
+            Serial.printf("[VER] latest=%s current=%s update=%s\n",
+                v.c_str(), FIRMWARE_VERSION, updateAvailable ? "yes" : "no");
+        }
+    }
+    http2.end();
+}
+
+static void versionCheckTask(void*) {
+    vTaskDelay(pdMS_TO_TICKS(8000)); // wait for WiFi/mDNS to fully settle
+    checkForUpdate();
+    vTaskDelete(NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -418,12 +469,14 @@ void setup() {
     http.on("/reset",             HTTP_POST, handleResetPost);
     http.on("/ota/github",        HTTP_POST, handleOtaGithub);
     http.on("/ota/upload",        HTTP_POST, handleOtaUploadDone, handleOtaUploadChunk);
+    http.on("/version.json",      HTTP_GET,  handleVersionJson);
     http.begin();
 
     ws.begin();
     ws.onEvent(wsEvent);
 
     lastFrameMs = millis();
+    xTaskCreate(versionCheckTask, "ver_chk", 8192, nullptr, 1, nullptr);
     Serial.println("[BOOT] ready.");
 }
 
