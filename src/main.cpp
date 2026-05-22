@@ -11,7 +11,6 @@
 #include <Adafruit_NeoPixel.h>
 #include <Preferences.h>
 #include <WiFi.h>
-#include <WiFiUDP.h>
 #include <WiFiManager.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
