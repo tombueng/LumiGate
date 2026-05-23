@@ -1,25 +1,12 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Download and flash the latest LumiGate firmware to an ESP32.
-
-.DESCRIPTION
-    1. Checks for / installs Python 3 via winget
-    2. Installs esptool via pip
-    3. Downloads the four firmware blobs from the latest GitHub release
-    4. Lets you pick a COM port
-    5. Flashes the ESP32 (you must put it into boot mode first)
+    Download and flash the latest LumiGate firmware.
+    Auto-detects ESP32 vs ESP32-S3.
 #>
 
 $ErrorActionPreference = "Stop"
 $REPO = "tombueng/LumiGate"
-$BAUD = 460800
-$FLASH_ADDR = @{
-    "bootloader.bin"  = "0x1000"
-    "partitions.bin"  = "0x8000"
-    "boot_app0.bin"   = "0xe000"
-    "firmware.bin"    = "0x10000"
-}
 
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
@@ -36,11 +23,9 @@ foreach ($cmd in @("python", "python3")) {
         if ($ver -match "Python 3") { $python = $cmd; break }
     } catch {}
 }
-
 if (-not $python) {
     Write-Host "    Python 3 not found. Installing via winget..." -ForegroundColor Yellow
     winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
-    # Refresh PATH
     $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
                 [System.Environment]::GetEnvironmentVariable("PATH", "User")
     $python = "python"
@@ -52,11 +37,7 @@ Write-Ok (& $python --version)
 # ---------------------------------------------------------------------------
 Write-Step "Checking esptool..."
 $esptoolOk = $false
-try {
-    $et = & $python -m esptool version 2>&1
-    if ($et -match "esptool") { $esptoolOk = $true }
-} catch {}
-
+try { if (& $python -m esptool version 2>&1) { $esptoolOk = $true } } catch {}
 if (-not $esptoolOk) {
     Write-Host "    Installing esptool..." -ForegroundColor Yellow
     & $python -m pip install --quiet esptool
@@ -64,13 +45,72 @@ if (-not $esptoolOk) {
 Write-Ok "esptool ready"
 
 # ---------------------------------------------------------------------------
-# 3. Download firmware blobs
+# 3. Select COM port
+# ---------------------------------------------------------------------------
+Write-Step "Available COM ports:"
+$ports = [System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object
+if ($ports.Count -eq 0) { Write-Err "No COM ports found. Is the board connected?" }
+for ($i = 0; $i -lt $ports.Count; $i++) { Write-Host "    [$i] $($ports[$i])" }
+$idx = Read-Host "`n    Enter number for your board's COM port"
+if (-not ($idx -match '^\d+$') -or [int]$idx -ge $ports.Count) { Write-Err "Invalid selection." }
+$port = $ports[[int]$idx]
+Write-Ok "Selected $port"
+
+# ---------------------------------------------------------------------------
+# 4. Boot mode
+# ---------------------------------------------------------------------------
+Write-Host ""
+Write-Host "###############################################################" -ForegroundColor Yellow
+Write-Host "#   PUT THE BOARD INTO BOOT MODE                              #" -ForegroundColor Yellow
+Write-Host "#                                                              #" -ForegroundColor Yellow
+Write-Host "#   1. Hold the BOOT button                                   #" -ForegroundColor Yellow
+Write-Host "#   2. While holding BOOT, press and release EN/RST           #" -ForegroundColor Yellow
+Write-Host "#   3. Release BOOT                                           #" -ForegroundColor Yellow
+Write-Host "#                                                              #" -ForegroundColor Yellow
+Write-Host "#   ESP32-S3: use the USB-UART port, not the native USB port  #" -ForegroundColor Yellow
+Write-Host "###############################################################" -ForegroundColor Yellow
+Read-Host "`n    Press ENTER when the board is in boot mode"
+
+# ---------------------------------------------------------------------------
+# 5. Auto-detect chip
+# ---------------------------------------------------------------------------
+Write-Step "Detecting chip on $port ..."
+$chipOut = & $python -m esptool --port $port --before no_reset chip_id 2>&1
+$chipStr = $chipOut | Out-String
+
+if ($chipStr -match "ESP32-S3") {
+    $chip      = "esp32s3"
+    $baud      = 921600
+    $boardName = "ESP32-S3"
+    $files = [ordered]@{
+        "bootloader-esp32s3.bin" = "0x0000"
+        "partitions-esp32s3.bin" = "0x8000"
+        "boot_app0.bin"          = "0xe000"
+        "firmware-esp32s3.bin"   = "0x10000"
+    }
+} elseif ($chipStr -match "ESP32") {
+    $chip      = "esp32"
+    $baud      = 460800
+    $boardName = "ESP32"
+    $files = [ordered]@{
+        "bootloader.bin"  = "0x1000"
+        "partitions.bin"  = "0x8000"
+        "boot_app0.bin"   = "0xe000"
+        "firmware.bin"    = "0x10000"
+    }
+} else {
+    Write-Host $chipStr
+    Write-Err "Could not identify chip. Check the COM port and boot mode."
+}
+Write-Ok "Detected: $boardName"
+
+# ---------------------------------------------------------------------------
+# 6. Download firmware
 # ---------------------------------------------------------------------------
 Write-Step "Fetching latest release from github.com/$REPO ..."
-$apiUrl  = "https://api.github.com/repos/$REPO/releases/tags/latest"
 $headers = @{ "User-Agent" = "LumiGate-flash-script" }
 try {
-    $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$REPO/releases/tags/latest" -Headers $headers
 } catch {
     Write-Err "Could not reach GitHub API: $_"
 }
@@ -78,9 +118,9 @@ try {
 $tmpDir = Join-Path $env:TEMP "lumigate_flash"
 New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 
-foreach ($file in $FLASH_ADDR.Keys) {
+foreach ($file in $files.Keys) {
     $asset = $release.assets | Where-Object { $_.name -eq $file }
-    if (-not $asset) { Write-Err "Asset '$file' not found in latest release." }
+    if (-not $asset) { Write-Err "Asset '$file' not found in release." }
     $dest = Join-Path $tmpDir $file
     Write-Host "    Downloading $file ..." -NoNewline
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $dest -UseBasicParsing
@@ -88,63 +128,30 @@ foreach ($file in $FLASH_ADDR.Keys) {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Select COM port
+# 7. Flash
 # ---------------------------------------------------------------------------
-Write-Step "Available COM ports:"
-$ports = [System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object
-if ($ports.Count -eq 0) { Write-Err "No COM ports found. Is the ESP32 connected?" }
+Write-Step "Flashing $boardName on $port at $baud baud..."
 
-for ($i = 0; $i -lt $ports.Count; $i++) {
-    Write-Host "    [$i] $($ports[$i])"
-}
-$idx = Read-Host "`n    Enter number for your ESP32 COM port"
-if (-not ($idx -match '^\d+$') -or [int]$idx -ge $ports.Count) {
-    Write-Err "Invalid selection."
-}
-$port = $ports[[int]$idx]
-Write-Ok "Selected $port"
-
-# ---------------------------------------------------------------------------
-# 5. Boot-mode instructions
-# ---------------------------------------------------------------------------
-Write-Host ""
-Write-Host "############################################################" -ForegroundColor Yellow
-Write-Host "#   PUT THE ESP32 INTO BOOT MODE NOW                       #" -ForegroundColor Yellow
-Write-Host "#                                                           #" -ForegroundColor Yellow
-Write-Host "#   1. Hold the BOOT button (GPIO0) on the ESP32           #" -ForegroundColor Yellow
-Write-Host "#   2. While holding BOOT, press and release the EN/RST    #" -ForegroundColor Yellow
-Write-Host "#      button once                                          #" -ForegroundColor Yellow
-Write-Host "#   3. Release BOOT                                         #" -ForegroundColor Yellow
-Write-Host "#   The blue LED should now be OFF (boot loader mode)       #" -ForegroundColor Yellow
-Write-Host "############################################################" -ForegroundColor Yellow
-Write-Host ""
-Read-Host "    Press ENTER when the ESP32 is in boot mode"
-
-# ---------------------------------------------------------------------------
-# 6. Flash
-# ---------------------------------------------------------------------------
-Write-Step "Flashing $port at $BAUD baud..."
-
-$args = @(
+$flashArgs = @(
     "-m", "esptool",
-    "--chip",  "esp32",
-    "--port",  $port,
-    "--baud",  $BAUD,
+    "--chip",   $chip,
+    "--port",   $port,
+    "--baud",   $baud,
     "--before", "no_reset",
     "--after",  "hard_reset",
-    "write_flash", "-z", "--flash_mode", "dio", "--flash_freq", "80m",
-    $FLASH_ADDR["bootloader.bin"],  (Join-Path $tmpDir "bootloader.bin"),
-    $FLASH_ADDR["partitions.bin"],  (Join-Path $tmpDir "partitions.bin"),
-    $FLASH_ADDR["boot_app0.bin"],   (Join-Path $tmpDir "boot_app0.bin"),
-    $FLASH_ADDR["firmware.bin"],    (Join-Path $tmpDir "firmware.bin")
+    "write_flash", "-z", "--flash_mode", "dio", "--flash_freq", "80m"
 )
+foreach ($file in $files.Keys) {
+    $flashArgs += $files[$file]
+    $flashArgs += (Join-Path $tmpDir $file)
+}
 
-& $python @args
+& $python @flashArgs
 if ($LASTEXITCODE -ne 0) { Write-Err "esptool exited with code $LASTEXITCODE" }
 
 Write-Host ""
-Write-Host "############################################################" -ForegroundColor Green
-Write-Host "#   Flash complete!                                         #" -ForegroundColor Green
-Write-Host "#   Press the EN/RST button (or power-cycle) to boot.      #" -ForegroundColor Green
-Write-Host "#   First boot opens WiFi AP: DMX-Gateway (no password)    #" -ForegroundColor Green
-Write-Host "############################################################" -ForegroundColor Green
+Write-Host "###############################################################" -ForegroundColor Green
+Write-Host "#   Flash complete! ($boardName)                               #" -ForegroundColor Green
+Write-Host "#   Press EN/RST to boot.                                     #" -ForegroundColor Green
+Write-Host "#   First boot opens WiFi AP: DMX-Gateway (no password)       #" -ForegroundColor Green
+Write-Host "###############################################################" -ForegroundColor Green
