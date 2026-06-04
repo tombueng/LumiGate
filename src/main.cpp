@@ -691,6 +691,7 @@ static void handleLogo() {
 
 static void handleBootstrapCss() {
     http.sendHeader("Cache-Control", "max-age=604800");
+    http.sendHeader("Content-Encoding", "gzip");
     http.send_P(200, "text/css", (const char*)BOOTSTRAP_MIN_CSS, BOOTSTRAP_MIN_CSS_LEN);
 }
 

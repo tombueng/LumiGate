@@ -6,6 +6,7 @@ Also writes src/generated/version.h from the LUMIGATE_VERSION env var.
 """
 Import("env")
 import os
+import gzip
 import pathlib
 
 def escape_c(s: str) -> str:
@@ -56,7 +57,16 @@ def generate():
     for f in sorted((root / "src" / "assets").glob("*.png")):
         binary_to_header(f, gen_dir, "PNG")
     for f in sorted((root / "src" / "assets").glob("*.css")):
-        binary_to_header(f, gen_dir, "CSS")
+        # Gzip-compress CSS before embedding — reduces 232 KB bootstrap to ~40 KB
+        raw = f.read_bytes()
+        compressed = gzip.compress(raw, compresslevel=9)
+        # Write to a temp file with the original name so the header/variable
+        # names stay identical (BOOTSTRAP_MIN_CSS / bootstrap_min_css.h)
+        tmp = gen_dir / f.name
+        tmp.write_bytes(compressed)
+        binary_to_header(tmp, gen_dir, "CSS")
+        tmp.unlink()
+        print(f"  [gzip]  {f.name}: {len(raw)} -> {len(compressed)} bytes ({100*len(compressed)//len(raw)}%)")
     print("LumiGate: done.")
 
 # Run immediately so headers exist before main.cpp is compiled
