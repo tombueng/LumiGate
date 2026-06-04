@@ -8,6 +8,14 @@
 |---|---|
 | ![Status page](docs/screenshot-status.png) | ![Settings page](docs/screenshot-config.png) |
 
+### Web UI walkthrough
+
+A guided tour of every control — manual channel control, labels, sparkline history, identify, blackout, and all settings:
+
+![LumiGate web UI walkthrough](docs/demo.gif)
+
+▶ **[Watch the full-quality MP4](docs/demo.mp4)** &nbsp;·&nbsp; regenerate with [`docs/screenshot.mjs`](docs/screenshot.mjs)
+
 ---
 
 ## Features

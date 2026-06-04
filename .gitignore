@@ -1,2 +1,4 @@
 .pio/
 src/generated/
+docs/node_modules/
+docs/video-raw/
