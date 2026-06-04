@@ -181,18 +181,36 @@ footer a:hover { color:var(--gh-text); }
     <div class="card-header">Firmware Update</div>
     <div class="card-body">
 
-      <div class="mb-4">
-        <div class="fw-semibold small mb-1">Update from GitHub</div>
-        <p class="text-secondary small mb-2">Current version: <strong>v{{VERSION}}</strong></p>
-        <p class="text-secondary small mb-2">
-          Downloads the latest release from
-          <a href="https://github.com/tombueng/LumiGate/releases/tag/latest" target="_blank" class="text-secondary">GitHub</a>
-          and installs it. The device reboots automatically when done.
-        </p>
-        <form method="POST" action="/ota/github">
-          <button type="submit" class="btn btn-outline-primary btn-sm">
-            &#8635;&nbsp; Update from GitHub
-          </button>
+      <div class="mb-3">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+          <span class="fw-semibold small">Update from GitHub</span>
+          <span class="text-secondary small">Installed: <strong>v{{VERSION}}</strong></span>
+        </div>
+
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" id="auto-update-sw">
+          <label class="form-check-label small" for="auto-update-sw">
+            Auto-update &mdash; install new firmware automatically when available
+          </label>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0" style="--bs-table-bg:transparent;font-size:.8rem">
+            <thead>
+              <tr class="text-secondary">
+                <th>Version</th><th>Released</th><th style="width:48%">Changes</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="ver-rows">
+              <tr><td colspan="4" class="text-secondary text-center small py-2">Loading versions&hellip;</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="form-text">Select any version to install. The device reboots automatically when done.</div>
+
+        <!-- Hidden form used to trigger a version-targeted OTA -->
+        <form method="POST" action="/ota/github" id="ota-form" class="d-none">
+          <input type="hidden" name="version" id="ota-version">
         </form>
       </div>
 
@@ -245,6 +263,72 @@ footer a:hover { color:var(--gh-text); }
   &nbsp;&mdash;&nbsp; <a href="https://github.com/tombueng/LumiGate">LumiGate</a>
   &nbsp;&mdash;&nbsp; MIT License
 </footer>
+
+<script>
+// ── Auto-update toggle (persisted on device, no reboot) ─────────────────────
+(function(){
+  var sw = document.getElementById('auto-update-sw');
+  sw.checked = '{{AUTO_UPDATE}}' === '1';
+  sw.addEventListener('change', function(){
+    var body = 'enabled=' + (sw.checked ? '1' : '0');
+    fetch('/autoupdate', { method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body })
+      .catch(function(){});
+  });
+})();
+
+// ── Version table from GitHub ───────────────────────────────────────────────
+var CURRENT = '{{VERSION}}';
+function vNum(s){ var m = String(s).match(/(\d+)\.(\d+)\.(\d+)/); return m ? (+m[1]*1e6 + +m[2]*1e3 + +m[3]) : 0; }
+function extractChanges(body){
+  if (!body) return [];
+  var b = body;
+  var cut = b.search(/##?\s*Flash files/i);
+  if (cut >= 0) b = b.slice(0, cut);
+  return b.split('\n').map(function(l){ return l.trim(); })
+    .filter(function(l){ return /^[-•]/.test(l); })
+    .map(function(l){ return l.replace(/^[-•]\s*/, ''); });
+}
+function installVersion(ver){
+  if (!confirm('Install v' + ver + '? The device will reboot.')) return;
+  document.getElementById('ota-version').value = ver;
+  document.getElementById('ota-form').submit();
+}
+fetch('https://api.github.com/repos/tombueng/LumiGate/releases?per_page=50')
+  .then(function(r){ return r.json(); })
+  .then(function(list){
+    var rows = (list||[])
+      .filter(function(rel){ return /^v\d+\.\d+\.\d+$/.test(rel.tag_name); })
+      .sort(function(a,b){ return vNum(b.tag_name) - vNum(a.tag_name); });
+    var tb = document.getElementById('ver-rows');
+    if (!rows.length){ tb.innerHTML = '<tr><td colspan="4" class="text-secondary text-center small py-2">No releases found</td></tr>'; return; }
+    tb.innerHTML = rows.map(function(rel, i){
+      var ver = rel.tag_name.replace(/^v/, '');
+      var date = (rel.published_at||'').slice(0,10);
+      var changes = extractChanges(rel.body);
+      var chHtml = changes.length
+        ? '<ul class="mb-0 ps-3">' + changes.slice(0,8).map(function(c){
+            return '<li>' + c.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</li>'; }).join('') + '</ul>'
+        : '<span class="text-secondary">&mdash;</span>';
+      var isCurrent = (ver === CURRENT);
+      var badge = (i === 0 ? ' <span class="badge bg-primary">latest</span>' : '')
+                + (isCurrent ? ' <span class="badge bg-success">installed</span>' : '');
+      var btn = isCurrent
+        ? '<button class="btn btn-outline-secondary btn-sm" disabled>Installed</button>'
+        : '<button class="btn btn-outline-primary btn-sm" onclick="installVersion(\'' + ver + '\')">Install</button>';
+      return '<tr>' +
+        '<td class="text-nowrap">v' + ver + badge + '</td>' +
+        '<td class="text-nowrap text-secondary">' + date + '</td>' +
+        '<td class="small">' + chHtml + '</td>' +
+        '<td class="text-end">' + btn + '</td>' +
+        '</tr>';
+    }).join('');
+  })
+  .catch(function(){
+    document.getElementById('ver-rows').innerHTML =
+      '<tr><td colspan="4" class="text-secondary text-center small py-2">Could not reach GitHub</td></tr>';
+  });
+</script>
 
 </body>
 </html>

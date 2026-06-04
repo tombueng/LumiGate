@@ -13,6 +13,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history + tags so we can diff against the previous version
 
       - uses: actions/cache@v4
         with:
@@ -47,19 +49,32 @@ jobs:
           BOOT_APP0=$(find ~/.platformio/packages -name "boot_app0.bin" | head -1)
           cp "$BOOT_APP0" boot_app0.bin
           echo "1.0.${{ github.run_number }}" > version.txt
-          git log --pretty=format:"• %s" -20 --no-merges > changes.txt
         env:
           LUMIGATE_VERSION: "1.0.${{ github.run_number }}"
 
-      - name: Delete existing latest release
-        run: gh release delete latest --yes 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build per-version changelog
+        run: |
+          # Commits introduced since the previous version tag (meaningful only)
+          PREV_TAG=$(git tag -l 'v1.0.*' | sort -V | tail -1)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+            echo "Diffing against $PREV_TAG"
+          else
+            RANGE="HEAD"
+          fi
+          git log --pretty=format:"- %s" --no-merges $RANGE \
+            | grep -viE "^- (merge|wip\b|fixup|amend|typo|formatting|whitespace)" \
+            > changes.txt || true
+          # Fallback if empty (e.g. first release or only filtered commits)
+          if [ ! -s changes.txt ]; then
+            git log --pretty=format:"- %s" --no-merges -10 > changes.txt
+          fi
+          echo "----- changes.txt -----"; cat changes.txt
 
-      - name: Publish rolling latest release
+      - name: Compose release notes
         run: |
           {
-            echo "## Changes"
+            echo "## What's new in v1.0.${{ github.run_number }}"
             echo ""
             cat changes.txt
             echo ""
@@ -71,9 +86,28 @@ jobs:
             echo ""
             echo "_Build 1.0.${{ github.run_number }} from ${{ github.sha }}_"
           } > notes.md
-          gh release create latest \
+
+      - name: Publish preserved versioned release
+        run: |
+          gh release create "v1.0.${{ github.run_number }}" \
             --title "v1.0.${{ github.run_number }} ($(date -u '+%Y-%m-%d %H:%M UTC'))" \
             --notes-file notes.md \
+            --target "${{ github.sha }}" \
+            --prerelease \
+            firmware.bin bootloader.bin partitions.bin boot_app0.bin \
+            firmware-esp32s3.bin bootloader-esp32s3.bin partitions-esp32s3.bin \
+            firmware-wt32eth01.bin bootloader-wt32eth01.bin partitions-wt32eth01.bin \
+            version.txt changes.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update rolling 'latest' release
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest \
+            --title "Latest → v1.0.${{ github.run_number }} ($(date -u '+%Y-%m-%d %H:%M UTC'))" \
+            --notes-file notes.md \
+            --target "${{ github.sha }}" \
             --prerelease \
             firmware.bin bootloader.bin partitions.bin boot_app0.bin \
             firmware-esp32s3.bin bootloader-esp32s3.bin partitions-esp32s3.bin \

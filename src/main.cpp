@@ -154,6 +154,7 @@ static bool     manualMode   = false;
 static uint32_t lastWsPush   = 0;
 static uint32_t lastDmxMs    = 0;
 static bool     pendingGithubOta = false;
+static String   otaTarget       = "latest";   // release tag to install
 static String   latestVersion   = "";
 static bool     updateAvailable = false;
 
@@ -181,6 +182,7 @@ struct Config {
     String gateway;
     String subnet;
     String dns;
+    bool   autoUpdate;     // auto-install newer firmware when detected
 } cfg;
 
 // Channel labels — stored verbatim as a JSON object string {"1":"Front L",...}
@@ -204,6 +206,7 @@ static void loadConfig() {
     cfg.gateway     = prefs.getString("gateway", "");
     cfg.subnet      = prefs.getString("subnet",  "255.255.255.0");
     cfg.dns         = prefs.getString("dns",     "");
+    cfg.autoUpdate  = prefs.getBool("autoupd",   false);
     g_labels        = prefs.getString("labels",  "{}");
     prefs.end();
 }
@@ -221,16 +224,20 @@ static void saveConfig() {
     prefs.putString("gateway",  cfg.gateway);
     prefs.putString("subnet",   cfg.subnet);
     prefs.putString("dns",      cfg.dns);
+    prefs.putBool("autoupd",    cfg.autoUpdate);
     prefs.end();
 }
 
 // ---------------------------------------------------------------------------
 // LED helpers
 // ---------------------------------------------------------------------------
-static constexpr uint32_t NEO_OFF   = 0x000000;
-static constexpr uint32_t NEO_GREEN = 0x002200;
-static constexpr uint32_t NEO_AMBER = 0x221000;
-static constexpr uint32_t NEO_RED   = 0x220000;
+static constexpr uint32_t NEO_OFF    = 0x000000;
+static constexpr uint32_t NEO_GREEN  = 0x002200;
+static constexpr uint32_t NEO_AMBER  = 0x221000;
+static constexpr uint32_t NEO_RED    = 0x220000;
+static constexpr uint32_t NEO_BLUE   = 0x000022;   // connecting to WiFi
+static constexpr uint32_t NEO_PURPLE = 0x180018;   // AP / config portal active
+static constexpr uint32_t NEO_WHITE  = 0x0a0a0a;   // booting
 
 static void initLed() {
     if (cfg.ledType == 1 && cfg.ledPin >= 0) {
@@ -622,6 +629,7 @@ static void handleConfigGet() {
     p.replace("{{GATEWAY}}",   cfg.gateway);
     p.replace("{{SUBNET}}",    cfg.subnet);
     p.replace("{{DNS}}",       cfg.dns);
+    p.replace("{{AUTO_UPDATE}}", cfg.autoUpdate ? "1" : "0");
     http.send(200, "text/html", p);
 }
 
@@ -667,6 +675,13 @@ static void handleLabelsPost() {
     prefs.putString("labels", g_labels);
     prefs.end();
     http.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handleAutoUpdatePost() {
+    cfg.autoUpdate = http.hasArg("enabled") && http.arg("enabled") == "1";
+    saveConfig();
+    http.send(200, "application/json",
+        String("{\"autoUpdate\":") + (cfg.autoUpdate ? "true" : "false") + "}");
 }
 
 static void handleResetGet()  { http.send(200, "text/html", FPSTR(RESET_HTML)); }
@@ -731,25 +746,36 @@ static void checkForUpdate() {
 static void versionCheckTask(void*) {
     vTaskDelay(pdMS_TO_TICKS(8000));
     checkForUpdate();
+    if (cfg.autoUpdate && updateAvailable) {
+        Serial.println("[OTA] auto-update enabled, installing latest...");
+        otaTarget = "latest";
+        pendingGithubOta = true;   // loop() performs the update
+    }
     vTaskDelete(NULL);
 }
 
 // ---------------------------------------------------------------------------
 // OTA handlers
 // ---------------------------------------------------------------------------
-static void doGithubOta() {
-    Serial.println("[OTA] Starting GitHub update...");
-    dmxReady = false;
-#ifdef CONFIG_IDF_TARGET_ESP32S3
-    const char* otaUrl = "https://github.com/tombueng/LumiGate/releases/download/latest/firmware-esp32s3.bin";
+// Firmware asset name for this build target
+#if defined(USE_ETHERNET)
+#define OTA_BIN "firmware-wt32eth01.bin"
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+#define OTA_BIN "firmware-esp32s3.bin"
 #else
-    const char* otaUrl = "https://github.com/tombueng/LumiGate/releases/download/latest/firmware.bin";
+#define OTA_BIN "firmware.bin"
 #endif
+
+static void doGithubOta() {
+    String otaUrl = "https://github.com/tombueng/LumiGate/releases/download/"
+                    + otaTarget + "/" + OTA_BIN;
+    Serial.printf("[OTA] Starting update from %s\n", otaUrl.c_str());
+    dmxReady = false;
     WiFiClientSecure client;
     client.setInsecure();
     httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     httpUpdate.rebootOnUpdate(true);
-    t_httpUpdate_return ret = httpUpdate.update(client, otaUrl);
+    httpUpdate.update(client, otaUrl);
     Serial.printf("[OTA] Failed (%d): %s\n",
         httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
     dmxReady = true;
@@ -758,6 +784,16 @@ static void doGithubOta() {
 }
 
 static void handleOtaGithub() {
+    // Optional ?version=1.0.N (or form arg) selects a specific release; default latest
+    String v = http.arg("version");
+    v.trim();
+    if (v.length() == 0 || v == "latest") {
+        otaTarget = "latest";
+    } else {
+        if (v[0] == 'v' || v[0] == 'V') v = v.substring(1);
+        otaTarget = "v" + v;
+    }
+    Serial.printf("[OTA] Target requested: %s\n", otaTarget.c_str());
     http.send(200, "text/html", FPSTR(OTA_PROGRESS_HTML));
     pendingGithubOta = true;
 }
@@ -799,6 +835,7 @@ static void wmSaveCallback() { wm_shouldSave = true; }
 static void startWiFiManager(bool forcePortal) {
     WiFiManager wm;
     wm.setSaveConfigCallback(wmSaveCallback);
+    wm.setAPCallback([](WiFiManager*) { setLedColor(NEO_PURPLE, true); }); // portal open
     wm.setConnectTimeout(60);
     wm.setConfigPortalTimeout(180);
     if (cfg.staticIp) {
@@ -856,6 +893,7 @@ void setup() {
 
     loadConfig();
     initLed();
+    setLedColor(NEO_WHITE, true);   // booting
     pinMode(BOOT_PIN, INPUT_PULLUP);
 
 #ifdef USE_ETHERNET
@@ -869,7 +907,10 @@ void setup() {
     }
     Serial.print("[ETH] waiting for link");
     { uint32_t t = millis();
-      while (!netConnected() && millis() - t < 15000) { delay(200); Serial.print("."); } }
+      while (!netConnected() && millis() - t < 15000) {
+          setLedColor((millis() % 600) < 300 ? NEO_BLUE : NEO_OFF, (millis() % 600) < 300);
+          delay(200); Serial.print(".");
+      } }
     Serial.println();
     Serial.printf("[ETH] %s\n", netLocalIP().toString().c_str());
 #else
@@ -886,6 +927,7 @@ void setup() {
         saveConfig();
     }
     WiFi.mode(WIFI_STA);
+    setLedColor(NEO_BLUE, true);   // connecting to stored WiFi
     startWiFiManager(forcePortal);
     Serial.printf("[WiFi] %s / %s\n", netSSID().c_str(), netLocalIP().toString().c_str());
 #endif
@@ -922,6 +964,7 @@ void setup() {
     http.on("/version.json",      HTTP_GET,  handleVersionJson);
     http.on("/labels.json",       HTTP_GET,  handleLabelsGet);
     http.on("/labels",            HTTP_POST, handleLabelsPost);
+    http.on("/autoupdate",        HTTP_POST, handleAutoUpdatePost);
     http.onNotFound([]() { http.send(404, "text/plain", "Not found"); });
     http.begin();
 
@@ -971,5 +1014,14 @@ void loop() {
     if (pendingGithubOta) {
         pendingGithubOta = false;
         doGithubOta();
+    }
+
+    // Heap watchdog: log periodically so leaks/fragmentation are visible
+    static uint32_t lastHeapLog = 0;
+    if (now - lastHeapLog >= 10000) {
+        lastHeapLog = now;
+        Serial.printf("[HEAP] free=%u minFree=%u maxBlock=%u up=%lus ws=%u\n",
+            ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(),
+            (unsigned long)uptimeSec(), ws.connectedClients());
     }
 }
