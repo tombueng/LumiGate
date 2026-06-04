@@ -155,6 +155,7 @@ static uint32_t lastWsPush   = 0;
 static uint32_t lastDmxMs    = 0;
 static bool     pendingGithubOta = false;
 static String   latestVersion   = "";
+static String   latestNotes     = "";
 static bool     updateAvailable = false;
 
 // Identify: temporarily force one channel to full on the wire to locate a fixture
@@ -527,7 +528,17 @@ static void handleVersionJson() {
     j += latestVersion.length() > 0 ? latestVersion : String(FIRMWARE_VERSION);
     j += "\",\"update\":";
     j += updateAvailable ? "true" : "false";
-    j += "}";
+    j += ",\"notes\":\"";
+    // Escape the notes for JSON: replace \ " and newlines
+    for (int i = 0; i < (int)latestNotes.length(); i++) {
+        char c = latestNotes[i];
+        if      (c == '"')  j += "\\\"";
+        else if (c == '\\') j += "\\\\";
+        else if (c == '\n') j += "\\n";
+        else if (c == '\r') {}
+        else                j += c;
+    }
+    j += "\"}";
     http.send(200, "application/json", j);
 }
 
@@ -707,17 +718,28 @@ static void checkForUpdate() {
     client.setInsecure();
     HTTPClient http2;
     http2.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+
     if (!http2.begin(client, "https://github.com/tombueng/LumiGate/releases/download/latest/version.txt")) return;
     int code = http2.GET();
     if (code == 200) {
         String v = http2.getString();
         v.trim();
         if (v.length() > 0 && v.length() < 24) {
-            latestVersion  = v;
+            latestVersion   = v;
             updateAvailable = parseBuild(v) > parseBuild(String(FIRMWARE_VERSION));
             Serial.printf("[VER] latest=%s current=%s update=%s\n",
                 v.c_str(), FIRMWARE_VERSION, updateAvailable ? "yes" : "no");
         }
+    }
+    http2.end();
+
+    if (!updateAvailable) return;
+    if (!http2.begin(client, "https://github.com/tombueng/LumiGate/releases/download/latest/changes.txt")) return;
+    code = http2.GET();
+    if (code == 200) {
+        String n = http2.getString();
+        n.trim();
+        if (n.length() > 0 && n.length() < 2000) latestNotes = n;
     }
     http2.end();
 }

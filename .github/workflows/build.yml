@@ -47,6 +47,7 @@ jobs:
           BOOT_APP0=$(find ~/.platformio/packages -name "boot_app0.bin" | head -1)
           cp "$BOOT_APP0" boot_app0.bin
           echo "1.0.${{ github.run_number }}" > version.txt
+          git log --pretty=format:"• %s" -20 --no-merges > changes.txt
         env:
           LUMIGATE_VERSION: "1.0.${{ github.run_number }}"
 
@@ -69,6 +70,6 @@ jobs:
             firmware.bin bootloader.bin partitions.bin boot_app0.bin \
             firmware-esp32s3.bin bootloader-esp32s3.bin partitions-esp32s3.bin \
             firmware-wt32eth01.bin bootloader-wt32eth01.bin partitions-wt32eth01.bin \
-            version.txt
+            version.txt changes.txt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

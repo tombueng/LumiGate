@@ -128,10 +128,13 @@ footer a:hover { color: var(--gh-text); }
   </div>
 
   <!-- Update banner -->
-  <div id="update-banner" class="d-flex align-items-center justify-content-between mb-3 px-3 py-2 rounded"
-       style="display:none!important;background:#2d2a00;border:1px solid #e3b341">
-    <span style="color:#e3b341;font-size:.85rem">&#8635;&nbsp; Firmware update available: <strong id="update-ver"></strong></span>
-    <a href="/config" class="btn btn-sm fw-semibold" style="background:#e3b341;color:#000;font-size:.78rem">Update</a>
+  <div id="update-banner" class="mb-3 px-3 py-2 rounded"
+       style="display:none;background:#2d2a00;border:1px solid #e3b341">
+    <div class="d-flex align-items-center justify-content-between">
+      <span style="color:#e3b341;font-size:.85rem">&#8635;&nbsp; Firmware update available: <strong id="update-ver"></strong></span>
+      <a href="/config" class="btn btn-sm fw-semibold" style="background:#e3b341;color:#000;font-size:.78rem">Update</a>
+    </div>
+    <pre id="update-notes" style="display:none;margin:.5rem 0 0;font-size:.72rem;color:#c9b458;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.25);border-radius:4px;padding:.4rem .6rem;max-height:160px;overflow-y:auto"></pre>
   </div>
 
   <!-- Stats (5 cards) -->
@@ -482,8 +485,12 @@ setInterval(pollData, 2000);
 fetch('/version.json').then(function(r) { return r.json(); }).then(function(d) {
   if (d.update) {
     document.getElementById('update-ver').textContent = d.latest;
-    var b = document.getElementById('update-banner');
-    b.style.cssText = 'display:flex!important;background:#2d2a00;border:1px solid #e3b341';
+    document.getElementById('update-banner').style.display = 'block';
+    if (d.notes) {
+      var pre = document.getElementById('update-notes');
+      pre.textContent = d.notes;
+      pre.style.display = 'block';
+    }
   }
 }).catch(function() {});
 </script>
