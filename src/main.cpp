@@ -123,6 +123,12 @@ static String    netSSID()      { return WiFi.SSID(); }
 static int       netRSSI()      { return (int)WiFi.RSSI(); }
 #endif
 
+// Parse a dotted-quad into IPAddress; returns false (and 0.0.0.0) if invalid/empty
+static bool parseIp(const String& s, IPAddress& out) {
+    if (s.length() == 0) { out = IPAddress(0,0,0,0); return false; }
+    return out.fromString(s);
+}
+
 // ---------------------------------------------------------------------------
 // Global objects
 // ---------------------------------------------------------------------------
@@ -151,6 +157,12 @@ static bool     pendingGithubOta = false;
 static String   latestVersion   = "";
 static bool     updateAvailable = false;
 
+// Identify: temporarily force one channel to full on the wire to locate a fixture
+static constexpr uint32_t IDENTIFY_MS = 1500;
+static uint16_t identifyCh      = 0;       // 1-512, 0 = inactive
+static uint32_t identifyUntil   = 0;
+static uint32_t lastIdentifyTx  = 0;
+
 // WS binary frame: fps(2) rssi(2) heap(4) uptime(4) senders(1) conflict(1) jitter(2) dmx(512) = 528
 static uint8_t wsBuf[528];
 
@@ -164,7 +176,17 @@ struct Config {
     int    protocol;
     int    ledPin;
     int    ledType;
+    bool   staticIp;       // false = DHCP
+    String ip;             // dotted-quad strings; empty when unused
+    String gateway;
+    String subnet;
+    String dns;
 } cfg;
+
+// Channel labels — stored verbatim as a JSON object string {"1":"Front L",...}
+// The browser owns editing; the device just persists the blob it receives.
+static constexpr size_t LABELS_MAX = 3000;
+static String g_labels = "{}";
 
 // ---------------------------------------------------------------------------
 // Config persistence
@@ -177,6 +199,12 @@ static void loadConfig() {
     cfg.protocol    = prefs.getInt("protocol",  DEF_PROTOCOL);
     cfg.ledPin      = prefs.getInt("ledpin",    DEF_LED_PIN);
     cfg.ledType     = prefs.getInt("ledtype",   DEF_LED_TYPE);
+    cfg.staticIp    = prefs.getBool("staticip", false);
+    cfg.ip          = prefs.getString("ip",      "");
+    cfg.gateway     = prefs.getString("gateway", "");
+    cfg.subnet      = prefs.getString("subnet",  "255.255.255.0");
+    cfg.dns         = prefs.getString("dns",     "");
+    g_labels        = prefs.getString("labels",  "{}");
     prefs.end();
 }
 
@@ -188,6 +216,11 @@ static void saveConfig() {
     prefs.putInt("protocol",    cfg.protocol);
     prefs.putInt("ledpin",      cfg.ledPin);
     prefs.putInt("ledtype",     cfg.ledType);
+    prefs.putBool("staticip",   cfg.staticIp);
+    prefs.putString("ip",       cfg.ip);
+    prefs.putString("gateway",  cfg.gateway);
+    prefs.putString("subnet",   cfg.subnet);
+    prefs.putString("dns",      cfg.dns);
     prefs.end();
 }
 
@@ -243,9 +276,15 @@ static String ipStr(uint32_t ip) {
 
 static void sendDmx() {
     if (!dmxReady) return;
+    // Identify override: force one channel to full on the wire only,
+    // without corrupting the stored value the UI/Art-Net see.
+    bool ov = identifyCh && millis() < identifyUntil;
+    uint8_t saved = 0;
+    if (ov) { saved = dmxBuf[identifyCh]; dmxBuf[identifyCh] = 255; }
     dmx_write(DMX_PORT, dmxBuf, DMX_PACKET_SIZE);
     dmx_send(DMX_PORT);
     dmx_wait_sent(DMX_PORT, DMX_TIMEOUT_TICK);
+    if (ov) dmxBuf[identifyCh] = saved;
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +396,17 @@ static void wsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t len) {
     }
     if (msg.indexOf("\"mode\"") >= 0) {
         manualMode = (msg.indexOf("true") >= 0); return;
+    }
+    if (msg.indexOf("\"identify\"") >= 0) {
+        int chIdx = msg.indexOf("\"ch\":");
+        if (chIdx < 0) return;
+        int ch = msg.substring(chIdx + 5).toInt();
+        if (ch < 1 || ch > 512) return;
+        identifyCh    = (uint16_t)ch;
+        identifyUntil = millis() + IDENTIFY_MS;
+        lastIdentifyTx = 0;
+        sendDmx();
+        return;
     }
     if (msg.indexOf("\"set\"") >= 0) {
         int chIdx  = msg.indexOf("\"ch\":");
@@ -567,6 +617,11 @@ static void handleConfigGet() {
     p.replace("{{PROTOCOL}}", String(cfg.protocol));
     p.replace("{{LED_PIN}}",  String(cfg.ledPin));
     p.replace("{{LED_TYPE}}", String(cfg.ledType));
+    p.replace("{{STATIC_IP}}", cfg.staticIp ? "1" : "0");
+    p.replace("{{IP}}",        cfg.ip);
+    p.replace("{{GATEWAY}}",   cfg.gateway);
+    p.replace("{{SUBNET}}",    cfg.subnet);
+    p.replace("{{DNS}}",       cfg.dns);
     http.send(200, "text/html", p);
 }
 
@@ -583,10 +638,35 @@ static void handleConfigPost() {
         cfg.ledType = constrain(http.arg("ledtype").toInt(), 0, 2);
     if (http.hasArg("ledpin"))
         cfg.ledPin = constrain(http.arg("ledpin").toInt(), -1, 48);
+    cfg.staticIp = http.hasArg("staticip");
+    if (http.hasArg("ip"))      cfg.ip      = http.arg("ip");
+    if (http.hasArg("gateway")) cfg.gateway = http.arg("gateway");
+    if (http.hasArg("subnet"))  cfg.subnet  = http.arg("subnet");
+    if (http.hasArg("dns"))     cfg.dns     = http.arg("dns");
     saveConfig();
     http.send(200, "text/html", FPSTR(CONFIG_SAVED_HTML));
     delay(400);
     ESP.restart();
+}
+
+// ---------------------------------------------------------------------------
+// Channel labels — browser owns the JSON object, device just persists it
+// ---------------------------------------------------------------------------
+static void handleLabelsGet() {
+    http.send(200, "application/json", g_labels);
+}
+
+static void handleLabelsPost() {
+    String body = http.arg("plain");
+    if (body.length() == 0 || body.length() > LABELS_MAX || body[0] != '{') {
+        http.send(400, "text/plain", "Invalid labels payload");
+        return;
+    }
+    g_labels = body;
+    prefs.begin(PREF_NS, false);
+    prefs.putString("labels", g_labels);
+    prefs.end();
+    http.send(200, "application/json", "{\"ok\":true}");
 }
 
 static void handleResetGet()  { http.send(200, "text/html", FPSTR(RESET_HTML)); }
@@ -594,6 +674,9 @@ static void handleResetGet()  { http.send(200, "text/html", FPSTR(RESET_HTML)); 
 static void handleResetPost() {
     http.send(200, "text/html", FPSTR(RESET_DONE_HTML));
     delay(400);
+    // Also drop static IP so recovery always comes back up on DHCP
+    cfg.staticIp = false;
+    saveConfig();
 #ifndef USE_ETHERNET
     WiFiManager wm;
     wm.resetSettings();
@@ -712,6 +795,13 @@ static void startWiFiManager(bool forcePortal) {
     wm.setSaveConfigCallback(wmSaveCallback);
     wm.setConnectTimeout(60);
     wm.setConfigPortalTimeout(180);
+    if (cfg.staticIp) {
+        IPAddress ip, gw, sn, dns;
+        parseIp(cfg.ip, ip); parseIp(cfg.gateway, gw);
+        parseIp(cfg.subnet, sn); parseIp(cfg.dns, dns);
+        wm.setSTAStaticIPConfig(ip, gw, sn, dns);
+        Serial.printf("[WiFi] static IP %s\n", cfg.ip.c_str());
+    }
     snprintf(wm_universeStr, sizeof(wm_universeStr), "%d", cfg.universe);
     WiFiManagerParameter param_universe("universe", "Art-Net Universe (0-15)", wm_universeStr, 3);
     wm.addParameter(&param_universe);
@@ -764,6 +854,13 @@ void setup() {
 
 #ifdef USE_ETHERNET
     ETH.begin(1, 16, 23, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
+    if (cfg.staticIp) {
+        IPAddress ip, gw, sn, dns;
+        parseIp(cfg.ip, ip); parseIp(cfg.gateway, gw);
+        parseIp(cfg.subnet, sn); parseIp(cfg.dns, dns);
+        ETH.config(ip, gw, sn, dns);
+        Serial.printf("[ETH] static IP %s\n", cfg.ip.c_str());
+    }
     Serial.print("[ETH] waiting for link");
     { uint32_t t = millis();
       while (!netConnected() && millis() - t < 15000) { delay(200); Serial.print("."); } }
@@ -777,6 +874,10 @@ void setup() {
         while (digitalRead(BOOT_PIN) == LOW && millis()-t < HOLD_MS) delay(50);
         forcePortal = (digitalRead(BOOT_PIN) == LOW);
         Serial.println(forcePortal ? " → config portal" : " released");
+    }
+    if (forcePortal && cfg.staticIp) {   // recovery: come back on DHCP
+        cfg.staticIp = false;
+        saveConfig();
     }
     WiFi.persistent(false);
     WiFi.disconnect(true);
@@ -816,6 +917,8 @@ void setup() {
     http.on("/ota/github",        HTTP_POST, handleOtaGithub);
     http.on("/ota/upload",        HTTP_POST, handleOtaUploadDone, handleOtaUploadChunk);
     http.on("/version.json",      HTTP_GET,  handleVersionJson);
+    http.on("/labels.json",       HTTP_GET,  handleLabelsGet);
+    http.on("/labels",            HTTP_POST, handleLabelsPost);
     http.onNotFound([]() { http.send(404, "text/plain", "Not found"); });
     http.begin();
 
@@ -849,6 +952,17 @@ void loop() {
     if (now - lastWsPush >= 100) {
         wsPush();
         lastWsPush = now;
+    }
+
+    // Identify: keep refreshing the wire so the fixture stays lit even with
+    // no incoming Art-Net; on expiry, send one frame with the real value back.
+    if (identifyCh) {
+        if (now < identifyUntil) {
+            if (now - lastIdentifyTx >= 40) { sendDmx(); lastIdentifyTx = now; }
+        } else {
+            identifyCh = 0;
+            sendDmx();
+        }
     }
 
     if (pendingGithubOta) {

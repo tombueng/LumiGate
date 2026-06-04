@@ -84,6 +84,45 @@ footer a:hover { color:var(--gh-text); }
     </script>
 
     <div class="card mb-3">
+      <div class="card-header">Network</div>
+      <div class="card-body">
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" name="staticip" id="static-sw" value="1">
+          <label class="form-check-label small" for="static-sw">Use static IP (otherwise DHCP)</label>
+        </div>
+        <div id="static-fields">
+          <div class="mb-2">
+            <label class="form-label text-secondary small mb-1">IP address</label>
+            <input class="form-control" type="text" name="ip" value="{{IP}}" placeholder="192.168.1.50">
+          </div>
+          <div class="mb-2">
+            <label class="form-label text-secondary small mb-1">Gateway</label>
+            <input class="form-control" type="text" name="gateway" value="{{GATEWAY}}" placeholder="192.168.1.1">
+          </div>
+          <div class="mb-2">
+            <label class="form-label text-secondary small mb-1">Subnet mask</label>
+            <input class="form-control" type="text" name="subnet" value="{{SUBNET}}" placeholder="255.255.255.0">
+          </div>
+          <div>
+            <label class="form-label text-secondary small mb-1">DNS (optional)</label>
+            <input class="form-control" type="text" name="dns" value="{{DNS}}" placeholder="192.168.1.1">
+          </div>
+        </div>
+        <div class="form-text mt-2">Applied after reboot. Wrong values can make the device unreachable &mdash; use the BOOT-button reset to recover.</div>
+      </div>
+    </div>
+    <script>
+    (function(){
+      var sw  = document.getElementById('static-sw');
+      var box = document.getElementById('static-fields');
+      sw.checked = '{{STATIC_IP}}' === '1';
+      function upd(){ box.style.display = sw.checked ? '' : 'none'; }
+      sw.addEventListener('change', upd);
+      upd();
+    })();
+    </script>
+
+    <div class="card mb-3">
       <div class="card-header">Status LED</div>
       <div class="card-body">
         <div class="mb-3">

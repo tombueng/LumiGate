@@ -23,15 +23,18 @@
 | **Jitter stat** | Real-time inter-frame timing deviation (EMA) |
 | **Change log** | Live log of DMX value changes with top-N changed channels per frame |
 | **Sparkline** | Per-channel history sparkline in the channel detail modal |
+| **Channel labels** | Name any channel (e.g. "Front Wash L") — shown in grid, modal, and change log |
+| **Identify** | Flash a channel to full for ~1.5 s to physically locate the fixture |
 | **Manual DMX control** | Click any channel in browser, set value via slider |
 | **Blackout button** | Zero all channels instantly from browser |
 | **Art-Net / Manual toggle** | Switch between protocol passthrough and manual override |
+| **Static IP or DHCP** | Configurable static IP/gateway/subnet/DNS, or automatic DHCP |
 | **WiFi Config Portal** | First-boot AP + captive portal via WiFiManager |
 | **OTA Updates** | ArduinoOTA (IDE/CLI) + manual `.bin` upload + one-click GitHub update |
 | **mDNS** | Reachable as `dmx-gateway.local` (hostname configurable) |
-| **REST API** | `GET /dmx.json`, `/senders.json`, `/log.json`, `/version.json` |
+| **REST API** | `GET /dmx.json`, `/senders.json`, `/log.json`, `/version.json`, `/labels.json` |
 | **Status LED** | Plain GPIO or WS2812 RGB NeoPixel — color codes WiFi/idle/DMX active state |
-| **NVS persistence** | Universe, protocol, hostname, OTA password, LED config survive reboots |
+| **NVS persistence** | Universe, protocol, IP config, labels, hostname, OTA password, LED config survive reboots |
 | **Config reset** | Hold BOOT button 3 s on startup, or via `/reset` page |
 | **Ethernet support** | WT32-ETH01: wired LAN via LAN8720, no WiFi required, DHCP |
 | **Dual/triple target** | Builds for ESP32 (WROOM-32), ESP32-S3 (DevKitC-1), WT32-ETH01 |
@@ -452,9 +455,16 @@ Bytes  16–527 DMX ch 1–512       uint8[512]
 
 Browser → ESP32 (JSON text):
 ```json
-{ "type": "set",     "ch": 1,   "val": 200  }
-{ "type": "mode",    "manual":  true         }
-{ "type": "blackout"                         }
+{ "type": "set",      "ch": 1,  "val": 200 }
+{ "type": "mode",     "manual": true       }
+{ "type": "blackout"                       }
+{ "type": "identify", "ch": 5              }
+```
+
+Channel labels are managed over REST, not the WebSocket:
+```
+GET  /labels.json          → { "1": "Front L", "5": "Haze" }
+POST /labels  (JSON body)  → store the full labels object
 ```
 
 ---
@@ -505,7 +515,7 @@ Default GPIO: `2` (ESP32 DevKit on-board LED). ESP32-S3 DevKitC-1 uses GPIO `48`
 - [ ] Fade engine (smooth transitions between scenes)
 - [ ] Failsafe scene (auto-load when Art-Net / sACN signal lost)
 - [ ] MQTT integration (Home Assistant / Node-RED)
-- [ ] Channel labels / fixture naming
+- [x] Channel labels / fixture naming
 - [ ] RDM support (requires module with controllable DE/RE pin, e.g. SP3485)
 - [ ] Multi-universe (multiple RS485 ports)
 
