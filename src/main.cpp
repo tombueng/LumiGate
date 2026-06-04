@@ -545,7 +545,7 @@ static void handleDmxJson() {
     char buf[32];
     snprintf(buf, sizeof(buf), "%.1f", fps);
     j  = "{\"fps\":";    j += buf;
-    j += ",\"rssi\":";   j += WiFi.RSSI();
+    j += ",\"rssi\":";   j += netRSSI();
     j += ",\"up\":\"";   j += uptimeStr();
     j += "\",\"heap\":"; j += ESP.getFreeHeap();
     j += ",\"manual\":"; j += manualMode ? "true" : "false";
