@@ -162,6 +162,7 @@ static bool     updateAvailable = false;
 static constexpr uint32_t IDENTIFY_MS = 1500;
 static uint16_t identifyCh      = 0;       // 1-512, 0 = inactive
 static uint32_t identifyUntil   = 0;
+static uint32_t lastIdentifyTx  = 0;
 
 // WS binary frame: fps(2) rssi(2) heap(4) uptime(4) senders(1) conflict(1) jitter(2) dmx(512) = 528
 static uint8_t wsBuf[528];
@@ -397,9 +398,8 @@ static void wsPush() {
 static void wsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t len) {
     if (type != WStype_TEXT || len < 2) return;
     String msg((char*)payload, len);
-    // Handlers only update dmxBuf — the DMX task pushes it to the wire at 40 Hz.
     if (msg.indexOf("\"blackout\"") >= 0) {
-        memset(&dmxBuf[1], 0, 512); return;
+        memset(&dmxBuf[1], 0, 512); sendDmx(); return;
     }
     if (msg.indexOf("\"mode\"") >= 0) {
         manualMode = (msg.indexOf("true") >= 0); return;
@@ -411,6 +411,8 @@ static void wsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t len) {
         if (ch < 1 || ch > 512) return;
         identifyCh    = (uint16_t)ch;
         identifyUntil = millis() + IDENTIFY_MS;
+        lastIdentifyTx = 0;
+        sendDmx();
         return;
     }
     if (msg.indexOf("\"set\"") >= 0) {
@@ -421,6 +423,7 @@ static void wsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t len) {
         int val = msg.substring(valIdx + 6).toInt();
         if (ch < 1 || ch > 512) return;
         dmxBuf[ch] = (uint8_t)constrain(val, 0, 255);
+        sendDmx();
     }
 }
 
@@ -435,6 +438,7 @@ static void onDmxFrame(const uint8_t* data, uint16_t length, uint32_t senderIp, 
 
     if (!manualMode) {
         memcpy(&dmxBuf[1], data, min((uint16_t)512, length));
+        sendDmx();
     }
 
     updateSender(senderIp, proto);
@@ -895,18 +899,14 @@ static void initOTA() {
 }
 
 // ---------------------------------------------------------------------------
-// DMX output + status LED task
-// Runs independently of loop() so network blocking (serving the web UI) never
-// stalls DMX output or freezes the status LED. Refreshes DMX continuously at
-// ~40 Hz, which also holds the last frame as a failsafe when input stops.
+// Status LED task
+// LED runs independently of loop() so network blocking (serving the web UI)
+// never freezes it. Very light (one pixel update every 50 ms) so it doesn't
+// compete with loop() for CPU. DMX output stays in loop()/callbacks.
 // ---------------------------------------------------------------------------
-static void dmxTask(void*) {
-    const TickType_t period = pdMS_TO_TICKS(25);
-    TickType_t wake = xTaskGetTickCount();
+static void ledTask(void*) {
+    const TickType_t period = pdMS_TO_TICKS(50);
     for (;;) {
-        if (identifyCh && millis() >= identifyUntil) identifyCh = 0;
-        sendDmx();   // applies identify override internally; no-op if !dmxReady
-
         uint32_t now = millis();
         if (!netConnected()) {
             setLedColor((now % 1000) < 120 ? NEO_RED : NEO_OFF, (now % 1000) < 120);
@@ -915,7 +915,7 @@ static void dmxTask(void*) {
         } else {
             setLedColor((now % 1000) < 500 ? NEO_AMBER : NEO_OFF, (now % 1000) < 500);
         }
-        vTaskDelayUntil(&wake, period);
+        vTaskDelay(period);
     }
 }
 
@@ -1003,9 +1003,6 @@ void setup() {
     http.on("/labels",            HTTP_POST, handleLabelsPost);
     http.on("/autoupdate",        HTTP_POST, handleAutoUpdatePost);
     http.onNotFound([]() { http.send(404, "text/plain", "Not found"); });
-    // Don't let handleClient() block loop() waiting for slow/idle clients —
-    // that was stalling DMX output and the status LED for seconds at a time.
-    http.enableDelay(false);
     http.begin();
 
     ws.begin();
@@ -1016,9 +1013,8 @@ void setup() {
     ws.enableHeartbeat(15000, 3000, 2);
 
     lastFrameMs = millis();
-    // DMX + LED on their own task (higher priority than loop) so web traffic
-    // can never stall DMX output or the status LED.
-    xTaskCreatePinnedToCore(dmxTask, "dmx", 4096, nullptr, 2, nullptr, 1);
+    // LED on its own low-priority task so web traffic can't freeze it.
+    xTaskCreate(ledTask, "led", 2048, nullptr, 1, nullptr);
     xTaskCreate(versionCheckTask, "ver_chk", 12288, nullptr, 1, nullptr);
     Serial.println("[BOOT] ready.");
 }
@@ -1043,6 +1039,17 @@ void loop() {
     if (now - lastMetaPush >= 2000) {
         wsPushMeta();
         lastMetaPush = now;
+    }
+
+    // Identify: refresh the channel on the wire so the fixture stays lit even
+    // with no incoming Art-Net; on expiry, send one frame with the real value.
+    if (identifyCh) {
+        if (now < identifyUntil) {
+            if (now - lastIdentifyTx >= 40) { sendDmx(); lastIdentifyTx = now; }
+        } else {
+            identifyCh = 0;
+            sendDmx();
+        }
     }
 
     if (pendingGithubOta) {
