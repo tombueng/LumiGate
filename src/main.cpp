@@ -970,6 +970,10 @@ void setup() {
 
     ws.begin();
     ws.onEvent(wsEvent);
+    // Reap dead clients: ping every 15 s, expect pong within 3 s, drop after 2 misses.
+    // Without this, browser tabs that close uncleanly leak connection slots until
+    // the server stops accepting new connections (web UI becomes unreachable).
+    ws.enableHeartbeat(15000, 3000, 2);
 
     lastFrameMs = millis();
     xTaskCreate(versionCheckTask, "ver_chk", 12288, nullptr, 1, nullptr);
