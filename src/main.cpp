@@ -538,7 +538,7 @@ static void handleVersionJson() {
     http.send(200, "application/json", j);
 }
 
-static void handleSendersJson() {
+static String sendersJson() {
     String j = "[";
     bool first = true;
     uint32_t now = millis();
@@ -558,10 +558,10 @@ static void handleSendersJson() {
         j += buf;
     }
     j += "]";
-    http.send(200, "application/json", j);
+    return j;
 }
 
-static void handleLogJson() {
+static String logJson() {
     String j = "[";
     bool first = true;
     for (int k = 0; k < logCount; k++) {
@@ -583,7 +583,23 @@ static void handleLogJson() {
         j += "]}";
     }
     j += "]";
-    http.send(200, "application/json", j);
+    return j;
+}
+
+static void handleSendersJson() { http.send(200, "application/json", sendersJson()); }
+static void handleLogJson()     { http.send(200, "application/json", logJson()); }
+
+// Push senders + log over the WebSocket (one persistent connection) so the
+// browser doesn't have to poll two HTTP endpoints every 2 s — that churn was
+// exhausting lwIP's TCP control blocks and wedging the HTTP server.
+static void wsPushMeta() {
+    if (ws.connectedClients() == 0) return;
+    String m = "{\"meta\":1,\"senders\":";
+    m += sendersJson();
+    m += ",\"log\":";
+    m += logJson();
+    m += "}";
+    ws.broadcastTXT(m);
 }
 
 static void handleRoot() {
@@ -992,16 +1008,25 @@ void loop() {
 
     uint32_t now = millis();
     if (!netConnected()) {
-        setLedColor((now % 1000) < 100 ? NEO_RED   : NEO_OFF, (now % 1000) < 100);
+        // No WiFi: fast red blink
+        setLedColor((now % 1000) < 120 ? NEO_RED : NEO_OFF, (now % 1000) < 120);
     } else if (now - lastDmxMs < 300) {
+        // DMX active: solid green
         setLedColor(NEO_GREEN, true);
     } else {
-        setLedColor((now % 2000) < 100 ? NEO_AMBER : NEO_OFF, (now % 2000) < 100);
+        // Idle (connected, no DMX): clearly-visible amber heartbeat (500/500)
+        setLedColor((now % 1000) < 500 ? NEO_AMBER : NEO_OFF, (now % 1000) < 500);
     }
 
     if (now - lastWsPush >= 100) {
         wsPush();
         lastWsPush = now;
+    }
+
+    static uint32_t lastMetaPush = 0;
+    if (now - lastMetaPush >= 2000) {
+        wsPushMeta();
+        lastMetaPush = now;
     }
 
     // Identify: keep refreshing the wire so the fixture stays lit even with

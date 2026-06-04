@@ -397,6 +397,14 @@ function connect() {
   sock.onopen  = function() { badge.textContent = 'Live';    badge.style.background = '#238636'; };
   sock.onclose = function() { badge.textContent = 'Offline'; badge.style.background = '#da3633'; setTimeout(connect, 2000); };
   sock.onmessage = function(e) {
+    if (typeof e.data === 'string') {
+      // Text frame: senders + log metadata (replaces HTTP polling)
+      try {
+        var meta = JSON.parse(e.data);
+        if (meta.meta) { updateSenders(meta.senders); updateLog(meta.log); }
+      } catch (err) {}
+      return;
+    }
     if (!(e.data instanceof ArrayBuffer)) return;
     // frame: fps(2) rssi(2) heap(4) uptime(4) senders(1) conflict(1) jitter(2) dmx(512)
     var v = new DataView(e.data);
@@ -474,12 +482,8 @@ function updateLog(data) {
   }).join('');
 }
 
-function pollData() {
-  fetch('/senders.json').then(function(r) { return r.json(); }).then(updateSenders).catch(function() {});
-  fetch('/log.json').then(function(r) { return r.json(); }).then(updateLog).catch(function() {});
-}
-pollData();
-setInterval(pollData, 2000);
+// Senders + log now arrive over the WebSocket (see sock.onmessage) — no HTTP
+// polling, which previously exhausted the device's TCP sockets.
 
 // Firmware update check
 function vNum(s) { var m = String(s).match(/(\d+)\.(\d+)\.(\d+)/); return m ? (+m[1]*1e6 + +m[2]*1e3 + +m[3]) : 0; }
@@ -491,25 +495,25 @@ function extractChanges(body) {
     .filter(function(l){ return /^[-•]/.test(l); })
     .map(function(l){ return l.replace(/^[-•]\s*/, ''); });
 }
+// Update check is driven entirely by the live GitHub release list so the banner
+// always reflects the true newest version (the device only polls once at boot).
 fetch('/version.json').then(function(r) { return r.json(); }).then(function(d) {
-  if (!d.update) return;
-  document.getElementById('update-ver').textContent = d.latest;
-  document.getElementById('update-banner').style.display = 'block';
   var curNum = vNum(d.current);
-  // Aggregate changes across every release newer than the installed version
   fetch('https://api.github.com/repos/tombueng/LumiGate/releases?per_page=50')
     .then(function(r) { return r.json(); })
     .then(function(list) {
-      var newer = (list || [])
-        .filter(function(rel){ return /^v\d+\.\d+\.\d+$/.test(rel.tag_name) && vNum(rel.tag_name) > curNum; })
+      var rels = (list || [])
+        .filter(function(rel){ return /^v\d+\.\d+\.\d+$/.test(rel.tag_name); })
         .sort(function(a,b){ return vNum(b.tag_name) - vNum(a.tag_name); });
-      if (!newer.length) return;
+      if (!rels.length || vNum(rels[0].tag_name) <= curNum) return;  // up to date
+      document.getElementById('update-ver').textContent = rels[0].tag_name.replace(/^v/, '');
+      document.getElementById('update-banner').style.display = 'block';
+      // Aggregate changes across every release newer than the installed version
       var lines = [];
-      newer.forEach(function(rel) {
-        var ver = rel.tag_name.replace(/^v/, '');
+      rels.filter(function(rel){ return vNum(rel.tag_name) > curNum; }).forEach(function(rel) {
         var ch = extractChanges(rel.body);
         if (ch.length) {
-          lines.push('v' + ver + ':');
+          lines.push(rel.tag_name + ':');
           ch.forEach(function(c){ lines.push('  • ' + c); });
         }
       });
