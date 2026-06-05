@@ -12,9 +12,9 @@
 
 A guided tour of every control — manual channel control, labels, sparkline history, identify, blackout, and all settings:
 
-[![LumiGate web UI walkthrough](docs/demo.gif)](https://youtu.be/G7UFDDZV3ZQ)
+[![LumiGate web UI walkthrough](docs/demo.gif)](https://youtu.be/up8lIbRqosQ)
 
-▶ **[Watch the full walkthrough on YouTube](https://youtu.be/G7UFDDZV3ZQ)** &nbsp;·&nbsp; regenerate with [`docs/screenshot.mjs`](docs/screenshot.mjs)
+▶ **[Watch the full walkthrough on YouTube](https://youtu.be/up8lIbRqosQ)** &nbsp;·&nbsp; regenerate with [`docs/screenshot.mjs`](docs/screenshot.mjs)
 
 ---
 
