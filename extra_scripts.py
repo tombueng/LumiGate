@@ -12,14 +12,31 @@ import pathlib
 def escape_c(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "")
 
+# Large static pages are gzip-compressed (served with Content-Encoding: gzip)
+# to slash per-connection heap/airtime. They must contain no {{placeholders}}
+# (dynamic values are fetched client-side from /info.json).
+GZIP_PAGES = {"index", "config"}
+
 def html_to_header(path: pathlib.Path, out_dir: pathlib.Path):
-    content = path.read_text(encoding="utf-8")
     var = path.stem.upper().replace("-", "_").replace(".", "_") + "_HTML"
+    out = out_dir / (path.stem + "_html.h")
+    if path.stem in GZIP_PAGES:
+        raw = path.read_bytes()
+        gz  = gzip.compress(raw, compresslevel=9)
+        rows = ["  " + ", ".join(f"0x{b:02x}" for b in gz[i:i+16]) + ","
+                for i in range(0, len(gz), 16)]
+        h  = f"// Auto-generated from {path.name} (gzip) — do not edit\n"
+        h += f"static const uint8_t {var}[] PROGMEM = {{\n"
+        h += "\n".join(rows) + "\n};\n"
+        h += f"static const size_t  {var}_LEN = {len(gz)};\n"
+        out.write_text(h, encoding="utf-8")
+        print(f"  [embed] {path.name} -> {out.name}  gzip {len(raw)} -> {len(gz)} bytes")
+        return
+    content = path.read_text(encoding="utf-8")
     lines = content.split("\n")
     body = "\n".join(f'    "{escape_c(l)}\\n"' for l in lines)
     h = f"// Auto-generated from {path.name} — do not edit\n"
     h += f"static const char {var}[] PROGMEM =\n{body};\n"
-    out = out_dir / (path.stem + "_html.h")
     out.write_text(h, encoding="utf-8")
     print(f"  [embed] {path.name} -> {out.name}  ({len(content)} chars)")
 

@@ -382,6 +382,7 @@ static void maybeLog(const uint8_t* data, uint16_t len, uint32_t ip, uint8_t pro
 // ---------------------------------------------------------------------------
 static void wsPush() {
     if (ws.count() == 0) return;
+    if (ESP.getFreeHeap() < 40000) return;   // never push under heap pressure
     uint16_t fpsI  = (uint16_t)(fps * 10.0f);
     int16_t  rssi  = (int16_t)netRSSI();
     uint32_t heap  = ESP.getFreeHeap();
@@ -435,8 +436,14 @@ static void handleWsText(const char* payload, size_t len) {
     }
 }
 
+static volatile uint32_t httpReqCount = 0;   // [DEBUG] HTTP requests served
+static volatile uint32_t wsConnCount  = 0;   // [DEBUG] WS connects
+static volatile uint32_t wsDiscCount  = 0;   // [DEBUG] WS disconnects
+
 static void onWsEvent(AsyncWebSocket*, AsyncWebSocketClient*, AwsEventType type,
                       void* arg, uint8_t* data, size_t len) {
+    if (type == WS_EVT_CONNECT)    { wsConnCount++; return; }
+    if (type == WS_EVT_DISCONNECT) { wsDiscCount++; return; }
     if (type != WS_EVT_DATA) return;
     AwsFrameInfo* info = (AwsFrameInfo*)arg;
     // Only handle complete, single-frame text messages (our control msgs are tiny)
@@ -627,6 +634,7 @@ static void handleLogJson(AsyncWebServerRequest* req)     { req->send(200, "appl
 // browser doesn't have to poll two HTTP endpoints every 2 s.
 static void wsPushMeta() {
     if (ws.count() == 0 || !ws.availableForWriteAll()) return;
+    if (ESP.getFreeHeap() < 40000) return;   // never push under heap pressure
     String m = "{\"meta\":1,\"senders\":";
     m += sendersJson();
     m += ",\"log\":";
@@ -638,7 +646,10 @@ static void wsPushMeta() {
 // Static pages are served straight from PROGMEM (zero heap). Dynamic values
 // are fetched client-side from /info.json.
 static void handleRoot(AsyncWebServerRequest* req) {
-    req->send_P(200, "text/html", INDEX_HTML);
+    httpReqCount++;
+    AsyncWebServerResponse* r = req->beginResponse_P(200, "text/html", INDEX_HTML, INDEX_HTML_LEN);
+    r->addHeader("Content-Encoding", "gzip");
+    req->send(r);
 }
 
 static void handleInfoJson(AsyncWebServerRequest* req) {
@@ -682,7 +693,9 @@ static void handleDmxJson(AsyncWebServerRequest* req) {
 }
 
 static void handleConfigGet(AsyncWebServerRequest* req) {
-    req->send_P(200, "text/html", CONFIG_HTML);
+    AsyncWebServerResponse* r = req->beginResponse_P(200, "text/html", CONFIG_HTML, CONFIG_HTML_LEN);
+    r->addHeader("Content-Encoding", "gzip");
+    req->send(r);
 }
 
 static void handleConfigPost(AsyncWebServerRequest* req) {
@@ -1090,7 +1103,7 @@ void loop() {
 
     static uint32_t lastWsClean = 0;
     if (now - lastWsClean >= 1000) {
-        ws.cleanupClients();
+        ws.cleanupClients(4);   // cap clients; drop oldest beyond 4
         lastWsClean = now;
     }
 
@@ -1110,10 +1123,11 @@ void loop() {
 
     // Periodic health line (leaks/uptime visible on the serial console)
     static uint32_t lastHeapLog = 0;
-    if (now - lastHeapLog >= 30000) {
+    if (now - lastHeapLog >= 15000) {
         lastHeapLog = now;
-        Serial.printf("[HEALTH] up=%lus heap=%u minFree=%u fps=%.1f ws=%u\n",
+        Serial.printf("[HEALTH] up=%lus heap=%u minFree=%u fps=%.1f ws=%u req=%u wsc=%u/%u\n",
             (unsigned long)uptimeSec(), ESP.getFreeHeap(), ESP.getMinFreeHeap(),
-            fps, ws.count());
+            fps, ws.count(), (unsigned)httpReqCount,
+            (unsigned)wsConnCount, (unsigned)wsDiscCount);
     }
 }
