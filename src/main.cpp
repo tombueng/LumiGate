@@ -1121,13 +1121,29 @@ void loop() {
         ESP.restart();
     }
 
+#ifndef USE_ETHERNET
+    // WiFi link watchdog: if the association drops, force a reconnect so the
+    // device comes back without waiting/rebooting (DMX output keeps running).
+    static uint32_t lastWifiOk = 0;
+    static uint32_t lastReconnect = 0;
+    if (WiFi.status() == WL_CONNECTED) {
+        lastWifiOk = now;
+    } else if (now - lastWifiOk > 5000 && now - lastReconnect > 10000) {
+        Serial.printf("[WiFi] link down (status=%d), reconnecting... up=%lus\n",
+            (int)WiFi.status(), (unsigned long)uptimeSec());
+        WiFi.disconnect();
+        WiFi.reconnect();
+        lastReconnect = now;
+    }
+#endif
+
     // Periodic health line (leaks/uptime visible on the serial console)
     static uint32_t lastHeapLog = 0;
     if (now - lastHeapLog >= 15000) {
         lastHeapLog = now;
-        Serial.printf("[HEALTH] up=%lus heap=%u minFree=%u fps=%.1f ws=%u req=%u wsc=%u/%u\n",
+        Serial.printf("[HEALTH] up=%lus heap=%u minFree=%u fps=%.1f rssi=%d st=%d ws=%u req=%u wsc=%u/%u\n",
             (unsigned long)uptimeSec(), ESP.getFreeHeap(), ESP.getMinFreeHeap(),
-            fps, ws.count(), (unsigned)httpReqCount,
+            fps, netRSSI(), (int)WiFi.status(), ws.count(), (unsigned)httpReqCount,
             (unsigned)wsConnCount, (unsigned)wsDiscCount);
     }
 }
