@@ -161,8 +161,6 @@ static bool     updateAvailable = false;
 static constexpr uint32_t IDENTIFY_MS = 1500;
 static uint16_t identifyCh      = 0;       // 1-512, 0 = inactive
 static uint32_t identifyUntil   = 0;
-static uint32_t lastIdentifyTx  = 0;
-static volatile bool dmxDirty   = false;   // manual change pending; loop() sends it
 static uint32_t pendingRebootAt = 0;       // 0 = none; loop() reboots when due
 static bool     pendingWifiReset = false;  // clear WiFi creds before reboot
 
@@ -410,8 +408,9 @@ static void wsPush() {
 // ---------------------------------------------------------------------------
 static void handleWsText(const char* payload, size_t len) {
     String msg(payload, len);
+    // Only update dmxBuf — loop()'s 40 Hz refresh outputs it.
     if (msg.indexOf("\"blackout\"") >= 0) {
-        memset(&dmxBuf[1], 0, 512); dmxDirty = true; return;
+        memset(&dmxBuf[1], 0, 512); return;
     }
     if (msg.indexOf("\"mode\"") >= 0) {
         manualMode = (msg.indexOf("true") >= 0); return;
@@ -423,7 +422,6 @@ static void handleWsText(const char* payload, size_t len) {
         if (ch < 1 || ch > 512) return;
         identifyCh    = (uint16_t)ch;
         identifyUntil = millis() + IDENTIFY_MS;
-        lastIdentifyTx = 0;
         return;
     }
     if (msg.indexOf("\"set\"") >= 0) {
@@ -434,7 +432,6 @@ static void handleWsText(const char* payload, size_t len) {
         int val = msg.substring(valIdx + 6).toInt();
         if (ch < 1 || ch > 512) return;
         dmxBuf[ch] = (uint8_t)constrain(val, 0, 255);
-        dmxDirty = true;
     }
 }
 
@@ -454,12 +451,18 @@ static void onWsEvent(AsyncWebSocket*, AsyncWebSocketClient*, AwsEventType type,
 static void onDmxFrame(const uint8_t* data, uint16_t length, uint32_t senderIp, uint8_t proto) {
     uint32_t now = millis();
 
+    // [DEBUG] flag DMX reception gaps (input stalled)
+    if (lastDmxMs && now - lastDmxMs > 300)
+        Serial.printf("[GAP] dmx input gap=%lums proto=%d up=%lus\n",
+            (unsigned long)(now - lastDmxMs), proto, (unsigned long)uptimeSec());
+
     // Log changes before dmxBuf is overwritten (need old values for comparison)
     maybeLog(data, length, senderIp, proto);
 
+    // Only update the buffer here; loop() refreshes the DMX wire at 40 Hz so
+    // brief input gaps (lost multicast) never interrupt the output.
     if (!manualMode) {
         memcpy(&dmxBuf[1], data, min((uint16_t)512, length));
-        sendDmx();
     }
 
     updateSender(senderIp, proto);
@@ -522,27 +525,30 @@ static void startSacn() {
 }
 
 static void readSacn() {
-    int pktLen = sacnUdp.parsePacket();
-    if (pktLen < SACN_MIN_LEN) return;
-    uint32_t senderIp = (uint32_t)sacnUdp.remoteIP();
-    int n = sacnUdp.read(sacnBuf, sizeof(sacnBuf));
-    if (n < SACN_MIN_LEN) return;
-    if (memcmp(sacnBuf + SACN_ACN_ID_OFF, ACN_PACKET_ID, 12) != 0) return;
-    uint32_t rootVec = ((uint32_t)sacnBuf[SACN_ROOT_VEC_OFF    ] << 24)
-                     | ((uint32_t)sacnBuf[SACN_ROOT_VEC_OFF + 1] << 16)
-                     | ((uint32_t)sacnBuf[SACN_ROOT_VEC_OFF + 2] <<  8)
-                     |  (uint32_t)sacnBuf[SACN_ROOT_VEC_OFF + 3];
-    if (rootVec != 0x00000004u) return;
-    uint32_t frameVec = ((uint32_t)sacnBuf[SACN_FRAME_VEC_OFF    ] << 24)
-                      | ((uint32_t)sacnBuf[SACN_FRAME_VEC_OFF + 1] << 16)
-                      | ((uint32_t)sacnBuf[SACN_FRAME_VEC_OFF + 2] <<  8)
-                      |  (uint32_t)sacnBuf[SACN_FRAME_VEC_OFF + 3];
-    if (frameVec != 0x00000002u) return;
-    uint16_t universe = ((uint16_t)sacnBuf[SACN_UNIVERSE_OFF] << 8)
-                       | sacnBuf[SACN_UNIVERSE_OFF + 1];
-    if ((int)universe != cfg.universe + 1) return;
-    if (sacnBuf[SACN_STARTCODE_OFF] != 0x00) return;
-    onDmxFrame(sacnBuf + SACN_DATA_OFF, 512, senderIp, 1);
+    // Drain all packets buffered since the last call (catches up after any gap)
+    for (int guard = 0; guard < 16; guard++) {
+        int pktLen = sacnUdp.parsePacket();
+        if (pktLen < SACN_MIN_LEN) return;
+        uint32_t senderIp = (uint32_t)sacnUdp.remoteIP();
+        int n = sacnUdp.read(sacnBuf, sizeof(sacnBuf));
+        if (n < SACN_MIN_LEN) continue;
+        if (memcmp(sacnBuf + SACN_ACN_ID_OFF, ACN_PACKET_ID, 12) != 0) continue;
+        uint32_t rootVec = ((uint32_t)sacnBuf[SACN_ROOT_VEC_OFF    ] << 24)
+                         | ((uint32_t)sacnBuf[SACN_ROOT_VEC_OFF + 1] << 16)
+                         | ((uint32_t)sacnBuf[SACN_ROOT_VEC_OFF + 2] <<  8)
+                         |  (uint32_t)sacnBuf[SACN_ROOT_VEC_OFF + 3];
+        if (rootVec != 0x00000004u) continue;
+        uint32_t frameVec = ((uint32_t)sacnBuf[SACN_FRAME_VEC_OFF    ] << 24)
+                          | ((uint32_t)sacnBuf[SACN_FRAME_VEC_OFF + 1] << 16)
+                          | ((uint32_t)sacnBuf[SACN_FRAME_VEC_OFF + 2] <<  8)
+                          |  (uint32_t)sacnBuf[SACN_FRAME_VEC_OFF + 3];
+        if (frameVec != 0x00000002u) continue;
+        uint16_t universe = ((uint16_t)sacnBuf[SACN_UNIVERSE_OFF] << 8)
+                           | sacnBuf[SACN_UNIVERSE_OFF + 1];
+        if ((int)universe != cfg.universe + 1) continue;
+        if (sacnBuf[SACN_STARTCODE_OFF] != 0x00) continue;
+        onDmxFrame(sacnBuf + SACN_DATA_OFF, 512, senderIp, 1);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -941,7 +947,8 @@ static void ledTask(void*) {
         uint32_t now = millis();
         if (!netConnected()) {
             setLedColor((now % 1000) < 120 ? NEO_RED : NEO_OFF, (now % 1000) < 120);
-        } else if (now - lastDmxMs < 300) {
+        } else if (now - lastDmxMs < 1500) {
+            // Hold "active" green through brief input gaps (lost multicast)
             setLedColor(NEO_GREEN, true);
         } else {
             setLedColor((now % 1000) < 500 ? NEO_AMBER : NEO_OFF, (now % 1000) < 500);
@@ -997,9 +1004,10 @@ void setup() {
     WiFi.mode(WIFI_STA);
     setLedColor(NEO_BLUE, true);   // connecting to stored WiFi
     startWiFiManager(forcePortal);
-    // NOTE: do NOT call WiFi.setSleep(false) — on this link it caused large
-    // transfers to stall mid-flight (the page would never finish loading).
-    // The default modem-sleep is stable; the async server keeps latency low.
+    // Disable WiFi power save: with modem-sleep the station misses buffered
+    // multicast (sACN) and IGMP queries, causing periodic ~0.3-0.5s reception
+    // gaps. WIFI_PS_NONE keeps the radio awake for reliable multicast.
+    WiFi.setSleep(WIFI_PS_NONE);
     Serial.printf("[WiFi] %s / %s\n", netSSID().c_str(), netLocalIP().toString().c_str());
 #endif
 
@@ -1062,8 +1070,12 @@ void loop() {
 
     uint32_t now = millis();
 
-    // Manual change from the web UI (WS handler set dmxBuf) — push it out
-    if (dmxDirty) { dmxDirty = false; sendDmx(); }
+    // Continuous DMX output at ~40 Hz: holds the last frame as a failsafe so
+    // brief input gaps (lost multicast on a weak link) never interrupt the
+    // lights. sendDmx() applies any identify override and manual changes too.
+    static uint32_t lastDmxTx = 0;
+    if (identifyCh && now >= identifyUntil) identifyCh = 0;
+    if (now - lastDmxTx >= 25) { sendDmx(); lastDmxTx = now; }
 
     if (now - lastWsPush >= 100) {
         wsPush();
@@ -1082,17 +1094,6 @@ void loop() {
         lastWsClean = now;
     }
 
-    // Identify: refresh the channel on the wire so the fixture stays lit even
-    // with no incoming Art-Net; on expiry, send one frame with the real value.
-    if (identifyCh) {
-        if (now < identifyUntil) {
-            if (now - lastIdentifyTx >= 40) { sendDmx(); lastIdentifyTx = now; }
-        } else {
-            identifyCh = 0;
-            sendDmx();
-        }
-    }
-
     if (pendingGithubOta) {
         pendingGithubOta = false;
         doGithubOta();
@@ -1107,12 +1108,12 @@ void loop() {
         ESP.restart();
     }
 
-    // Heap watchdog: log periodically so leaks/fragmentation are visible
+    // Periodic health line (leaks/uptime visible on the serial console)
     static uint32_t lastHeapLog = 0;
-    if (now - lastHeapLog >= 10000) {
+    if (now - lastHeapLog >= 30000) {
         lastHeapLog = now;
-        Serial.printf("[HEAP] free=%u minFree=%u maxBlock=%u up=%lus ws=%u\n",
-            ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(),
-            (unsigned long)uptimeSec(), ws.count());
+        Serial.printf("[HEALTH] up=%lus heap=%u minFree=%u fps=%.1f ws=%u\n",
+            (unsigned long)uptimeSec(), ESP.getFreeHeap(), ESP.getMinFreeHeap(),
+            fps, ws.count());
     }
 }
