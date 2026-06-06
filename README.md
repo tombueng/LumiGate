@@ -45,7 +45,8 @@ A guided tour of every control — manual channel control, labels, sparkline his
 | **mDNS** | Reachable as `dmx-gateway.local` (hostname configurable) |
 | **REST API** | `GET /dmx.json`, `/senders.json`, `/log.json`, `/version.json`, `/labels.json` |
 | **Status LED** | Plain GPIO or WS2812 RGB NeoPixel — color codes WiFi/idle/DMX active state |
-| **NVS persistence** | Universe, protocol, IP config, labels, hostname, OTA password, LED config survive reboots |
+| **Configurable DMX pins** | TX / RX / RTS GPIO and UART port (0/1/2) set at runtime via web UI — no recompile |
+| **NVS persistence** | Universe, protocol, IP config, labels, hostname, OTA password, LED/DMX pin config survive reboots |
 | **Config reset** | Hold BOOT button 3 s on startup, or via `/reset` page |
 | **Ethernet support** | WT32-ETH01: wired LAN via LAN8720, no WiFi required, DHCP |
 | **Dual/triple target** | Builds for ESP32 (WROOM-32), ESP32-S3 (DevKitC-1), WT32-ETH01 |
@@ -455,7 +456,7 @@ values are fetched as JSON.
 | URL | Method | Function |
 |---|---|---|
 | `/` | GET | Live status + 512-channel DMX grid (gzip) |
-| `/config` | GET / POST | Change universe, protocol, static IP, hostname, OTA password, LED config (gzip) |
+| `/config` | GET / POST | Change universe, protocol, static IP, hostname, OTA password, LED config, DMX pins (gzip) |
 | `/reset` | GET / POST | Clear WiFi credentials, reboot to AP mode |
 | `/info.json` | GET | Current settings + status (SSID, IP, universe, version, etc.) |
 | `/dmx.json` | GET | All 512 values, fps, rssi, uptime, heap, manual mode flag |
@@ -532,6 +533,30 @@ Default GPIO: `2` (ESP32 DevKit on-board LED). ESP32-S3 DevKitC-1 uses GPIO `48`
 
 ---
 
+## DMX Output Pins
+
+All DMX hardware settings are configurable at runtime under **Settings → DMX Output Pins** — no recompile needed.
+
+| Setting | Default | Description |
+|---|---|---|
+| UART port | `1` | Which ESP32 UART peripheral to use (0 / 1 / 2). UART1 is recommended; UART0 conflicts with Serial. |
+| TX pin | `17` (GPIO17) | ESP32 GPIO that drives the RS485 module's RXD input |
+| RX pin | `16` (GPIO16) | ESP32 GPIO connected to the RS485 module's TXD output |
+| RTS / DE pin | `−1` (disabled) | RS485 direction-control pin. Set to −1 for auto-direction modules (Waveshare C). Required for RDM. |
+
+**Board defaults** (applied on first boot; overrideable in the web UI):
+
+| Board | TX | RX | RTS |
+|---|---|---|---|
+| ESP32 DevKit / ESP32-S3 | GPIO17 | GPIO16 | −1 |
+| WT32-ETH01 | GPIO4 | GPIO5 | −1 |
+
+> GPIO16 is used by the LAN8720 Ethernet PHY on the WT32-ETH01, so the default pins are shifted.
+
+**Using a different RS485 module?** Connect your module's RXD (data-in) pin to the TX GPIO and its TXD (data-out) pin to the RX GPIO, then update Settings → DMX Output Pins to match.
+
+---
+
 ## Persistent Configuration (NVS)
 
 | Key | Default | Change via |
@@ -543,7 +568,8 @@ Default GPIO: `2` (ESP32 DevKit on-board LED). ESP32-S3 DevKitC-1 uses GPIO `48`
 | Channel labels | — | Status page (channel modal) |
 | Hostname | `dmx-gateway` | Web `/config` |
 | OTA Password | `dmxota` | Web `/config` |
-| LED type / GPIO pin | board default | Web `/config` |
+| LED type / GPIO pin | board default | Web `/config` (Status LED) |
+| UART port | `1` | Web `/config` (DMX Output Pins) |
 | DMX TX / RX / RTS pins | board default (TX=17, RX=16, RTS=−1) | Web `/config` (DMX Output Pins) |
 | WiFi credentials | — | Config portal or `/reset` |
 
