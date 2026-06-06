@@ -1212,6 +1212,13 @@ static void startWiFiManager(bool forcePortal) {
     if (wm_shouldSave) {
         cfg.universe = constrain(atoi(param_universe.getValue()), 0, 15);
         saveConfig();
+        // The captive-portal ran its own web server on port 80; it may not
+        // release the socket cleanly, which would stop our AsyncWebServer from
+        // binding (HTTP "connection refused" until reboot). Reboot for a clean
+        // start where auto-connect succeeds and the portal never runs.
+        Serial.println("[WiFi] credentials saved — rebooting for a clean start");
+        delay(400);
+        ESP.restart();
     }
 }
 
