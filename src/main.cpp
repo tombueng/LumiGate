@@ -207,10 +207,10 @@ static void loadConfig() {
     cfg.protocol    = prefs.getInt("protocol",  DEF_PROTOCOL);
     cfg.ledPin      = prefs.getInt("ledpin",    DEF_LED_PIN);
     cfg.ledType     = prefs.getInt("ledtype",   DEF_LED_TYPE);
-    cfg.dmxPort     = prefs.getInt("dmxport",   DEF_DMX_PORT);
-    cfg.dmxTxPin    = prefs.getInt("dmxtx",     DEF_DMX_TX_PIN);
-    cfg.dmxRxPin    = prefs.getInt("dmxrx",     DEF_DMX_RX_PIN);
-    cfg.dmxRtsPin   = prefs.getInt("dmxrts",    DEF_DMX_RTS_PIN);
+    cfg.dmxPort     = constrain(prefs.getInt("dmxport",  DEF_DMX_PORT),  1, 2);
+    cfg.dmxTxPin    = constrain(prefs.getInt("dmxtx",   DEF_DMX_TX_PIN), -1, 48);
+    cfg.dmxRxPin    = constrain(prefs.getInt("dmxrx",   DEF_DMX_RX_PIN), -1, 48);
+    cfg.dmxRtsPin   = constrain(prefs.getInt("dmxrts",  DEF_DMX_RTS_PIN),-1, 48);
     cfg.staticIp    = prefs.getBool("staticip", false);
     cfg.ip          = prefs.getString("ip",      "");
     cfg.gateway     = prefs.getString("gateway", "");
@@ -724,7 +724,7 @@ static void handleConfigPost(AsyncWebServerRequest* req) {
     if (argStr(req, "protocol", s)) cfg.protocol = constrain(s.toInt(), 0, 2);
     if (argStr(req, "ledtype", s))  cfg.ledType   = constrain(s.toInt(), 0, 2);
     if (argStr(req, "ledpin", s))   cfg.ledPin    = constrain(s.toInt(), -1, 48);
-    if (argStr(req, "dmxport", s))  cfg.dmxPort   = constrain(s.toInt(), 0, 2);
+    if (argStr(req, "dmxport", s))  cfg.dmxPort   = constrain(s.toInt(), 1, 2);
     if (argStr(req, "dmxtx", s))    cfg.dmxTxPin  = constrain(s.toInt(), -1, 48);
     if (argStr(req, "dmxrx", s))    cfg.dmxRxPin  = constrain(s.toInt(), -1, 48);
     if (argStr(req, "dmxrts", s))   cfg.dmxRtsPin = constrain(s.toInt(), -1, 48);
@@ -733,6 +733,7 @@ static void handleConfigPost(AsyncWebServerRequest* req) {
     if (argStr(req, "gateway", s)) cfg.gateway = s;
     if (argStr(req, "subnet", s))  cfg.subnet  = s;
     if (argStr(req, "dns", s))     cfg.dns     = s;
+    dmxReady = false;
     saveConfig();
     req->send_P(200, "text/html", CONFIG_SAVED_HTML);
     pendingRebootAt = millis() + 600;

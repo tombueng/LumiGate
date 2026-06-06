@@ -121,7 +121,6 @@ footer a:hover { color:var(--gh-text); }
         <div class="mb-3">
           <label class="form-label text-secondary small mb-1">UART port</label>
           <select class="form-select" name="dmxport" id="dmx-port">
-            <option value="0">UART0 (TX=1, RX=3 by default — conflicts with Serial)</option>
             <option value="1" selected>UART1 (recommended)</option>
             <option value="2">UART2</option>
           </select>
@@ -160,7 +159,7 @@ footer a:hover { color:var(--gh-text); }
       </div>
     </div>
 
-    <button type="submit" class="btn btn-primary w-100 mb-4">Save &amp; Restart</button>
+    <button type="submit" class="btn btn-primary w-100 mb-4" id="save-btn" disabled>Save &amp; Restart</button>
   </form>
 
   <!-- Firmware OTA -->
@@ -288,8 +287,9 @@ fetch('/info.json').then(function(r){ return r.json(); }).then(function(d){
   $('dev-otapw').value = d.otapw || '';
   $('auto-update-sw').checked = !!d.autoUpdate;
   updUniHint(); updStatic(); updLedPin(); updHostUrl();
+  $('save-btn').disabled = false;
   loadVersions();
-}).catch(function(){ loadVersions(); });
+}).catch(function(){ $('save-btn').disabled = false; loadVersions(); });
 
 $('proto-sel').addEventListener('change', updUniHint);
 $('uni-inp').addEventListener('input', updUniHint);
