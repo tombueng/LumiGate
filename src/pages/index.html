@@ -215,8 +215,8 @@ footer a:hover { color: var(--gh-text); }
     </div>
   </div>
 
-  <!-- Fixtures (RDM) -->
-  <div class="card mb-3">
+  <!-- Fixtures (RDM) — hidden entirely unless an RTS/DE pin is configured -->
+  <div class="card mb-3" id="rdm-card" style="display:none">
     <div class="card-header d-flex align-items-center justify-content-between">
       <span>Fixtures (RDM)</span>
       <button class="btn btn-primary btn-sm py-0" id="rdm-discover" onclick="rdmDiscover()">Discover</button>
@@ -527,15 +527,18 @@ function esc(s) {
 function rdmId(uid) { return 'rdma_' + uid.replace(/[^0-9A-Fa-f]/g, ''); }
 
 function rdmRender(d) {
+  // Hide the whole section unless RDM is enabled (an RTS/DE pin is configured).
+  var card = document.getElementById('rdm-card');
+  if (!d.available) { card.style.display = 'none'; return; }
+  card.style.display = '';
+
   var st = document.getElementById('rdm-status');
   var tbl = document.getElementById('rdm-table');
   var btn = document.getElementById('rdm-discover');
   var has = d.devices && d.devices.length;
-  btn.disabled = !d.available || d.busy;
+  btn.disabled = d.busy;
 
-  if (!d.available) {
-    st.textContent = 'RDM disabled — set an RTS/DE pin in Settings to enable discovery.';
-  } else if (d.busy) {
+  if (d.busy) {
     st.textContent = 'Scanning the line…';
     setTimeout(rdmRefresh, 1000);
   } else if (!has) {

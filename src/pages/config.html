@@ -116,31 +116,64 @@ footer a:hover { color:var(--gh-text); }
     </div>
 
     <div class="card mb-3">
-      <div class="card-header">DMX Output Pins</div>
+      <div class="card-header">DMX Output / RDM Pins</div>
       <div class="card-body">
+        <div class="form-text mb-3" style="line-height:1.5">
+          The numbers below are <strong>ESP32 GPIO numbers</strong> — the
+          <code>GPIO&nbsp;xx</code> / <code>IO&nbsp;xx</code> / <code>Gxx</code> labels printed on your
+          board next to each pin (the <em>chip</em> pin, <strong>not</strong> the physical header
+          position). Wire each one to the matching pin on your RS485 transceiver. Transceiver boards
+          name their pins inconsistently, so match by <em>function</em> — common aliases are listed
+          per field. (The RS485 side <code>A</code>/<code>B</code> and <code>VCC</code>/<code>GND</code>
+          are wired separately — see below.)
+        </div>
+
         <div class="mb-3">
           <label class="form-label text-secondary small mb-1">UART port</label>
           <select class="form-select" name="dmxport" id="dmx-port">
             <option value="1" selected>UART1 (recommended)</option>
             <option value="2">UART2</option>
           </select>
+          <div class="form-text">Which ESP32 hardware serial peripheral drives the line. UART1 is fine on all boards.</div>
         </div>
         <div class="mb-3">
-          <label class="form-label text-secondary small mb-1">TX pin (ESP32 → RS485 RXD)</label>
+          <label class="form-label text-secondary small mb-1">TX pin — data out (→ transceiver DI)</label>
           <input class="form-control" type="number" name="dmxtx" id="dmx-tx" min="-1" max="48" value="17">
+          <div class="form-text">
+            ESP32 GPIO that <em>sends</em> DMX. Wire to the transceiver's <strong>driver input</strong> —
+            labeled <code>DI</code> (or <code>TXD</code>/<code>TX</code>; on some cheap modules,
+            confusingly, <code>RXD</code>).
+          </div>
         </div>
         <div class="mb-3">
-          <label class="form-label text-secondary small mb-1">RX pin (RS485 TXD → ESP32)</label>
+          <label class="form-label text-secondary small mb-1">RX pin — data in (← transceiver RO)</label>
           <input class="form-control" type="number" name="dmxrx" id="dmx-rx" min="-1" max="48" value="16">
+          <div class="form-text">
+            ESP32 GPIO that <em>receives</em> fixture replies (needed for RDM). Wire to the
+            transceiver's <strong>receiver output</strong> — labeled <code>RO</code> (or
+            <code>RXD</code>/<code>RX</code>). If RDM/output won't work, try swapping TX&nbsp;↔&nbsp;RX.
+          </div>
         </div>
         <div>
-          <label class="form-label text-secondary small mb-1">RTS / DE-RE pin (RS485 direction)</label>
+          <label class="form-label text-secondary small mb-1">RTS / DE-RE pin — direction (→ transceiver EN)</label>
           <input class="form-control" type="number" name="dmxrts" id="dmx-rts" min="-1" max="48" value="-1">
           <div class="form-text">
-            Set this to your transceiver's <code>EN</code> / DE-RE pin to enable <strong>RDM</strong>
-            (auto-discovery + remote addressing). <strong>−1 disables RDM</strong> (and is required for
-            auto-direction modules like the Waveshare C). Applied after reboot.
+            ESP32 GPIO that switches the transceiver between transmit and receive. Wire to its
+            <strong>direction</strong> pin — labeled <code>EN</code>, or <code>DE</code>&nbsp;and
+            <code>RE</code> tied together. <strong>Set this to enable RDM</strong> (auto-discovery +
+            remote addressing). <strong>−1 disables RDM</strong> and is required for auto-direction
+            modules (no <code>EN</code>/DE-RE pin, e.g. the Waveshare C). Applied after reboot.
           </div>
+        </div>
+
+        <div class="form-text mt-3" style="border-top:1px solid #30363d;padding-top:.6rem;line-height:1.5">
+          <strong>Not set here</strong> (wire directly): the transceiver's RS485 side
+          <code>A</code>/<code>B</code> (a.k.a. <code>D+</code>/<code>D−</code>) → XLR
+          <strong>pin&nbsp;3</strong> / <strong>pin&nbsp;2</strong>, GND → XLR pin&nbsp;1; and its
+          <code>VCC</code>→3.3&nbsp;V, <code>GND</code>→GND. Add a 120&nbsp;Ω terminator across A/B at
+          the far end of the DMX chain (required for RDM).
+          <br><strong>Example (ESP32-S3 + MAX3485 "EN" board):</strong>
+          TX=<code>17</code>→DI, RX=<code>16</code>→RO, RTS=<code>4</code>→EN.
         </div>
       </div>
     </div>
