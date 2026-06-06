@@ -26,6 +26,8 @@
 #include <Update.h>
 #include <ArtnetWifi.h>
 #include <esp_dmx.h>
+#include <rdm/controller.h>     // RDM controller: discovery + GET/SET
+#include <rdm/include/uid.h>    // rdm_uid_is_eq() and friends
 
 // Auto-generated asset headers (produced by extra_scripts.py before each build)
 #include "generated/version.h"
@@ -317,6 +319,123 @@ static void sendDmx() {
 }
 
 // ---------------------------------------------------------------------------
+// RDM (E1.20) controller — discovery + GET/SET on the physical DMX line.
+// Needs a transceiver with a GPIO-controlled direction pin (cfg.dmxRtsPin, the
+// esp_dmx "enable" line). All bus access runs on loop()'s thread — the only
+// owner of the DMX port — so the async web/WS task just sets request flags.
+// ---------------------------------------------------------------------------
+struct RdmDevice {
+    rdm_uid_t uid;
+    uint16_t  startAddr;
+    uint16_t  footprint;
+    uint16_t  modelId;
+    uint16_t  subDeviceCount;
+    uint8_t   personality;
+    uint8_t   personalityCount;
+    bool      identifying;
+    char      swLabel[33];
+};
+static constexpr int RDM_MAX_DEVICES = 32;
+static RdmDevice rdmDevices[RDM_MAX_DEVICES];
+static int       rdmCount      = 0;
+static bool      rdmScanned    = false;       // a discovery has completed at least once
+static volatile bool rdmBusy   = false;       // discovery in progress
+static uint32_t  rdmLastScanMs = 0;
+
+// Single-slot request mailboxes: set by the async WS task, consumed in loop().
+static volatile bool rdmDiscoverReq = false;
+static volatile bool rdmSetAddrReq  = false;
+static volatile bool rdmIdentifyReq = false;
+static rdm_uid_t     rdmSetUid      = {0, 0};
+static rdm_uid_t     rdmIdentUid    = {0, 0};
+static volatile uint16_t rdmReqAddr = 1;
+static volatile bool rdmReqOn       = false;
+
+// RDM only works when the DMX driver is up AND a direction-enable pin is set.
+static bool rdmAvailable() { return dmxReady && cfg.dmxRtsPin >= 0; }
+
+static RdmDevice* rdmFind(const rdm_uid_t& uid) {
+    for (int i = 0; i < rdmCount; i++)
+        if (rdm_uid_is_eq(&rdmDevices[i].uid, &uid)) return &rdmDevices[i];
+    return nullptr;
+}
+
+// Parse a "uid":"MMMM:DDDDDDDD" field out of a small JSON control message.
+static bool rdmParseUid(const String& msg, rdm_uid_t& out) {
+    int k = msg.indexOf("\"uid\":\"");
+    if (k < 0) return false;
+    k += 7;
+    int colon = msg.indexOf(':', k);
+    int end   = msg.indexOf('"', k);
+    if (colon < 0 || end < 0 || colon > end) return false;
+    out.man_id = (uint16_t)strtoul(msg.substring(k, colon).c_str(), nullptr, 16);
+    out.dev_id = (uint32_t)strtoul(msg.substring(colon + 1, end).c_str(), nullptr, 16);
+    return true;
+}
+
+// Full discovery sweep + per-device GET device-info & software-version label.
+// Blocks the bus for the duration (~hundreds of ms) — DMX output pauses briefly.
+static void rdmDoDiscover() {
+    dmx_port_t port = (dmx_port_t)cfg.dmxPort;
+    rdmBusy = true;
+    rdm_uid_t uids[RDM_MAX_DEVICES];
+    int n = rdm_discover_devices_simple(port, uids, RDM_MAX_DEVICES);
+    if (n > RDM_MAX_DEVICES) n = RDM_MAX_DEVICES;
+    rdmCount = 0;
+    for (int i = 0; i < n; i++) {
+        RdmDevice d = {};
+        d.uid = uids[i];
+        rdm_ack_t ack;
+        rdm_device_info_t info;
+        if (rdm_send_get_device_info(port, &uids[i], RDM_SUB_DEVICE_ROOT, &info, &ack)
+            && ack.type == RDM_RESPONSE_TYPE_ACK) {
+            d.startAddr        = info.dmx_start_address;
+            d.footprint        = info.footprint;
+            d.modelId          = info.model_id;
+            d.subDeviceCount   = info.sub_device_count;
+            d.personality      = info.personality.current;
+            d.personalityCount = info.personality.count;
+        }
+        rdm_send_get_software_version_label(port, &uids[i], RDM_SUB_DEVICE_ROOT,
+                                            d.swLabel, sizeof(d.swLabel), &ack);
+        rdmDevices[rdmCount++] = d;
+    }
+    rdmScanned    = true;
+    rdmLastScanMs = millis();
+    rdmBusy       = false;
+    Serial.printf("[RDM] discovery: %d device(s)\n", rdmCount);
+}
+
+// Called once per loop() iteration; does work only when a request is queued.
+static void rdmService() {
+    if (!rdmAvailable()) return;
+    dmx_port_t port = (dmx_port_t)cfg.dmxPort;
+    rdm_ack_t ack;
+
+    if (rdmSetAddrReq) {
+        rdmSetAddrReq = false;
+        if (rdm_send_set_dmx_start_address(port, &rdmSetUid, RDM_SUB_DEVICE_ROOT,
+                                           rdmReqAddr, &ack)) {
+            RdmDevice* d = rdmFind(rdmSetUid);
+            if (d) d->startAddr = rdmReqAddr;
+            Serial.printf("[RDM] set " UIDSTR " addr=%u\n", UID2STR(rdmSetUid), rdmReqAddr);
+        }
+    }
+    if (rdmIdentifyReq) {
+        rdmIdentifyReq = false;
+        if (rdm_send_set_identify_device(port, &rdmIdentUid, RDM_SUB_DEVICE_ROOT,
+                                         rdmReqOn ? 1 : 0, &ack)) {
+            RdmDevice* d = rdmFind(rdmIdentUid);
+            if (d) d->identifying = rdmReqOn;
+        }
+    }
+    if (rdmDiscoverReq) {
+        rdmDiscoverReq = false;
+        rdmDoDiscover();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sender tracking
 // ---------------------------------------------------------------------------
 static void updateSender(uint32_t ip, uint8_t proto) {
@@ -447,6 +566,27 @@ static void handleWsText(const char* payload, size_t len) {
         int val = msg.substring(valIdx + 6).toInt();
         if (ch < 1 || ch > 512) return;
         dmxBuf[ch] = (uint8_t)constrain(val, 0, 255);
+        return;
+    }
+    // RDM control — only set request flags here; loop() owns the bus and runs them.
+    if (msg.indexOf("\"rdm_discover\"") >= 0) { rdmDiscoverReq = true; return; }
+    if (msg.indexOf("\"rdm_setaddr\"") >= 0) {
+        rdm_uid_t u;
+        int k = msg.indexOf("\"addr\":");
+        if (rdmParseUid(msg, u) && k >= 0) {
+            int a = msg.substring(k + 7).toInt();
+            if (a >= 1 && a <= 512) { rdmSetUid = u; rdmReqAddr = (uint16_t)a; rdmSetAddrReq = true; }
+        }
+        return;
+    }
+    if (msg.indexOf("\"rdm_identify\"") >= 0) {
+        rdm_uid_t u;
+        if (rdmParseUid(msg, u)) {
+            rdmIdentUid = u;
+            rdmReqOn    = (msg.indexOf("\"on\":true") >= 0);
+            rdmIdentifyReq = true;
+        }
+        return;
     }
 }
 
@@ -705,6 +845,44 @@ static void handleDmxJson(AsyncWebServerRequest* req) {
     for (int i = 1; i <= 512; i++) {
         j += dmxBuf[i];
         if (i < 512) j += ',';
+    }
+    j += "]}";
+    req->send(200, "application/json", j);
+}
+
+// Escape a fixture-supplied string for safe inclusion in JSON.
+static String rdmJsonEsc(const char* s) {
+    String o;
+    for (const char* p = s; *p; p++) {
+        char c = *p;
+        if (c == '"' || c == '\\') { o += '\\'; o += c; }
+        else if ((uint8_t)c >= 0x20)  o += c;
+    }
+    return o;
+}
+
+static void handleRdmJson(AsyncWebServerRequest* req) {
+    String j;
+    j.reserve(96 + rdmCount * 160);
+    j  = "{\"available\":"; j += rdmAvailable() ? "true" : "false";
+    j += ",\"busy\":";      j += rdmBusy ? "true" : "false";
+    j += ",\"scanned\":";   j += rdmScanned ? "true" : "false";
+    j += ",\"devices\":[";
+    for (int i = 0; i < rdmCount; i++) {
+        const RdmDevice& d = rdmDevices[i];
+        char uid[20];
+        snprintf(uid, sizeof(uid), "%04X:%08lX", d.uid.man_id, (unsigned long)d.uid.dev_id);
+        if (i) j += ',';
+        j += "{\"uid\":\"";     j += uid;          j += "\"";
+        j += ",\"addr\":";      j += d.startAddr;
+        j += ",\"footprint\":"; j += d.footprint;
+        j += ",\"model\":";     j += d.modelId;
+        j += ",\"pers\":";      j += d.personality;
+        j += ",\"persCount\":"; j += d.personalityCount;
+        j += ",\"subs\":";      j += d.subDeviceCount;
+        j += ",\"identify\":";  j += d.identifying ? "true" : "false";
+        j += ",\"sw\":\"";      j += rdmJsonEsc(d.swLabel); j += "\"";
+        j += "}";
     }
     j += "]}";
     req->send(200, "application/json", j);
@@ -1089,6 +1267,7 @@ void setup() {
     http.on("/ota/upload",        HTTP_POST, handleOtaUploadDone, handleOtaUploadChunk);
     http.on("/version.json",      HTTP_GET,  handleVersionJson);
     http.on("/info.json",         HTTP_GET,  handleInfoJson);
+    http.on("/rdm.json",          HTTP_GET,  handleRdmJson);
     http.on("/labels.json",       HTTP_GET,  handleLabelsGet);
     http.on("/labels",            HTTP_POST, [](AsyncWebServerRequest*){}, NULL, handleLabelsBody);
     http.on("/autoupdate",        HTTP_POST, handleAutoUpdatePost);
@@ -1123,6 +1302,11 @@ void loop() {
     static uint32_t lastDmxTx = 0;
     if (identifyCh && now >= identifyUntil) identifyCh = 0;
     if (now - lastDmxTx >= 25) { sendDmx(); lastDmxTx = now; }
+
+    // RDM discovery / GET-SET on the bus (no-op unless a request is queued and
+    // the direction-enable pin is configured). A full discovery briefly pauses
+    // DMX output while it sweeps the line.
+    rdmService();
 
     if (now - lastWsPush >= 100) {
         wsPush();
