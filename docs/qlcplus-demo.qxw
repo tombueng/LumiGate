@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE Workspace>
+<Workspace xmlns="http://www.qlcplus.org/Workspace" CurrentWindow="VirtualConsole">
+ <Creator>
+  <Name>Q Light Controller Plus</Name>
+  <Version>4.12.7</Version>
+  <Author>LumiGate</Author>
+ </Creator>
+ <Engine>
+  <InputOutputMap>
+   <Universe Name="Universe 1" ID="0"/>
+   <Universe Name="Universe 2" ID="1"/>
+   <Universe Name="Universe 3" ID="2"/>
+   <Universe Name="Universe 4" ID="3"/>
+  </InputOutputMap>
+
+  <!-- 6 single-channel dimmers on Universe 1, DMX channels 1..6 -->
+  <Fixture><Manufacturer>Generic</Manufacturer><Model>Generic</Model><Mode>Dimmer</Mode><ID>0</ID><Name>Dimmer 1</Name><Universe>0</Universe><Address>0</Address><Channels>1</Channels></Fixture>
+  <Fixture><Manufacturer>Generic</Manufacturer><Model>Generic</Model><Mode>Dimmer</Mode><ID>1</ID><Name>Dimmer 2</Name><Universe>0</Universe><Address>1</Address><Channels>1</Channels></Fixture>
+  <Fixture><Manufacturer>Generic</Manufacturer><Model>Generic</Model><Mode>Dimmer</Mode><ID>2</ID><Name>Dimmer 3</Name><Universe>0</Universe><Address>2</Address><Channels>1</Channels></Fixture>
+  <Fixture><Manufacturer>Generic</Manufacturer><Model>Generic</Model><Mode>Dimmer</Mode><ID>3</ID><Name>Dimmer 4</Name><Universe>0</Universe><Address>3</Address><Channels>1</Channels></Fixture>
+  <Fixture><Manufacturer>Generic</Manufacturer><Model>Generic</Model><Mode>Dimmer</Mode><ID>4</ID><Name>Dimmer 5</Name><Universe>0</Universe><Address>4</Address><Channels>1</Channels></Fixture>
+  <Fixture><Manufacturer>Generic</Manufacturer><Model>Generic</Model><Mode>Dimmer</Mode><ID>5</ID><Name>Dimmer 6</Name><Universe>0</Universe><Address>5</Address><Channels>1</Channels></Fixture>
+
+  <!-- Scenes -->
+  <Function ID="0" Type="Scene" Name="Blackout">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,0</FixtureVal><FixtureVal ID="1">0,0</FixtureVal><FixtureVal ID="2">0,0</FixtureVal>
+   <FixtureVal ID="3">0,0</FixtureVal><FixtureVal ID="4">0,0</FixtureVal><FixtureVal ID="5">0,0</FixtureVal>
+  </Function>
+  <Function ID="1" Type="Scene" Name="Full">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,255</FixtureVal><FixtureVal ID="1">0,255</FixtureVal><FixtureVal ID="2">0,255</FixtureVal>
+   <FixtureVal ID="3">0,255</FixtureVal><FixtureVal ID="4">0,255</FixtureVal><FixtureVal ID="5">0,255</FixtureVal>
+  </Function>
+  <Function ID="2" Type="Scene" Name="Odd">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,255</FixtureVal><FixtureVal ID="1">0,0</FixtureVal><FixtureVal ID="2">0,255</FixtureVal>
+   <FixtureVal ID="3">0,0</FixtureVal><FixtureVal ID="4">0,255</FixtureVal><FixtureVal ID="5">0,0</FixtureVal>
+  </Function>
+  <Function ID="3" Type="Scene" Name="Even">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,0</FixtureVal><FixtureVal ID="1">0,255</FixtureVal><FixtureVal ID="2">0,0</FixtureVal>
+   <FixtureVal ID="3">0,255</FixtureVal><FixtureVal ID="4">0,0</FixtureVal><FixtureVal ID="5">0,255</FixtureVal>
+  </Function>
+
+  <!-- Single-channel scenes for the running light (each lights one, rest off) -->
+  <Function ID="4" Type="Scene" Name="Only 1">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,255</FixtureVal><FixtureVal ID="1">0,0</FixtureVal><FixtureVal ID="2">0,0</FixtureVal>
+   <FixtureVal ID="3">0,0</FixtureVal><FixtureVal ID="4">0,0</FixtureVal><FixtureVal ID="5">0,0</FixtureVal>
+  </Function>
+  <Function ID="5" Type="Scene" Name="Only 2">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,0</FixtureVal><FixtureVal ID="1">0,255</FixtureVal><FixtureVal ID="2">0,0</FixtureVal>
+   <FixtureVal ID="3">0,0</FixtureVal><FixtureVal ID="4">0,0</FixtureVal><FixtureVal ID="5">0,0</FixtureVal>
+  </Function>
+  <Function ID="6" Type="Scene" Name="Only 3">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,0</FixtureVal><FixtureVal ID="1">0,0</FixtureVal><FixtureVal ID="2">0,255</FixtureVal>
+   <FixtureVal ID="3">0,0</FixtureVal><FixtureVal ID="4">0,0</FixtureVal><FixtureVal ID="5">0,0</FixtureVal>
+  </Function>
+  <Function ID="7" Type="Scene" Name="Only 4">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,0</FixtureVal><FixtureVal ID="1">0,0</FixtureVal><FixtureVal ID="2">0,0</FixtureVal>
+   <FixtureVal ID="3">0,255</FixtureVal><FixtureVal ID="4">0,0</FixtureVal><FixtureVal ID="5">0,0</FixtureVal>
+  </Function>
+  <Function ID="8" Type="Scene" Name="Only 5">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,0</FixtureVal><FixtureVal ID="1">0,0</FixtureVal><FixtureVal ID="2">0,0</FixtureVal>
+   <FixtureVal ID="3">0,0</FixtureVal><FixtureVal ID="4">0,255</FixtureVal><FixtureVal ID="5">0,0</FixtureVal>
+  </Function>
+  <Function ID="9" Type="Scene" Name="Only 6">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,0</FixtureVal><FixtureVal ID="1">0,0</FixtureVal><FixtureVal ID="2">0,0</FixtureVal>
+   <FixtureVal ID="3">0,0</FixtureVal><FixtureVal ID="4">0,0</FixtureVal><FixtureVal ID="5">0,255</FixtureVal>
+  </Function>
+
+  <!-- Breathing fade: all up, all down, smoothly, forever -->
+  <Function ID="10" Type="Chaser" Name="Fade (breathe)">
+   <Speed FadeIn="1500" FadeOut="1500" Duration="2000"/>
+   <Direction>Forward</Direction>
+   <RunOrder>Loop</RunOrder>
+   <SpeedModes FadeIn="Common" FadeOut="Common" Duration="Common"/>
+   <Step Number="0">1</Step>
+   <Step Number="1">0</Step>
+  </Function>
+
+  <!-- Blink: alternate odd / even, fast, forever -->
+  <Function ID="11" Type="Chaser" Name="Blink (odd/even)">
+   <Speed FadeIn="0" FadeOut="0" Duration="300"/>
+   <Direction>Forward</Direction>
+   <RunOrder>Loop</RunOrder>
+   <SpeedModes FadeIn="Common" FadeOut="Common" Duration="Common"/>
+   <Step Number="0">2</Step>
+   <Step Number="1">3</Step>
+  </Function>
+
+  <!-- Running light: chase 1..6, forever -->
+  <Function ID="12" Type="Chaser" Name="Running light">
+   <Speed FadeIn="120" FadeOut="0" Duration="160"/>
+   <Direction>Forward</Direction>
+   <RunOrder>Loop</RunOrder>
+   <SpeedModes FadeIn="Common" FadeOut="Common" Duration="Common"/>
+   <Step Number="0">4</Step>
+   <Step Number="1">5</Step>
+   <Step Number="2">6</Step>
+   <Step Number="3">7</Step>
+   <Step Number="4">8</Step>
+   <Step Number="5">9</Step>
+  </Function>
+
+  <!-- DEMO: cycle through the three effects, ~8 s each, forever -->
+  <Function ID="13" Type="Chaser" Name="DEMO (cycle)">
+   <Speed FadeIn="0" FadeOut="0" Duration="8000"/>
+   <Direction>Forward</Direction>
+   <RunOrder>Loop</RunOrder>
+   <SpeedModes FadeIn="Common" FadeOut="Common" Duration="Common"/>
+   <Step Number="0">10</Step>
+   <Step Number="1">11</Step>
+   <Step Number="2">12</Step>
+  </Function>
+ </Engine>
+
+ <VirtualConsole>
+  <Frame Caption="">
+   <Appearance>
+    <FrameStyle>None</FrameStyle>
+    <ForegroundColor>Default</ForegroundColor>
+    <BackgroundColor>Default</BackgroundColor>
+    <BackgroundImage>None</BackgroundImage>
+    <Font>Default</Font>
+   </Appearance>
+
+   <Button Caption="DEMO" ID="0" Icon="">
+    <WindowState Visible="True" X="30" Y="30" Width="140" Height="140"/>
+    <Appearance><FrameStyle>None</FrameStyle><ForegroundColor>Default</ForegroundColor><BackgroundColor>Default</BackgroundColor><BackgroundImage>None</BackgroundImage><Font>Default</Font></Appearance>
+    <Function ID="13"/>
+    <Action>Toggle</Action>
+   </Button>
+   <Button Caption="Fade" ID="1" Icon="">
+    <WindowState Visible="True" X="190" Y="30" Width="140" Height="140"/>
+    <Appearance><FrameStyle>None</FrameStyle><ForegroundColor>Default</ForegroundColor><BackgroundColor>Default</BackgroundColor><BackgroundImage>None</BackgroundImage><Font>Default</Font></Appearance>
+    <Function ID="10"/>
+    <Action>Toggle</Action>
+   </Button>
+   <Button Caption="Blink" ID="2" Icon="">
+    <WindowState Visible="True" X="350" Y="30" Width="140" Height="140"/>
+    <Appearance><FrameStyle>None</FrameStyle><ForegroundColor>Default</ForegroundColor><BackgroundColor>Default</BackgroundColor><BackgroundImage>None</BackgroundImage><Font>Default</Font></Appearance>
+    <Function ID="11"/>
+    <Action>Toggle</Action>
+   </Button>
+   <Button Caption="Running" ID="3" Icon="">
+    <WindowState Visible="True" X="510" Y="30" Width="140" Height="140"/>
+    <Appearance><FrameStyle>None</FrameStyle><ForegroundColor>Default</ForegroundColor><BackgroundColor>Default</BackgroundColor><BackgroundImage>None</BackgroundImage><Font>Default</Font></Appearance>
+    <Function ID="12"/>
+    <Action>Toggle</Action>
+   </Button>
+   <Button Caption="BLACKOUT" ID="4" Icon="">
+    <WindowState Visible="True" X="30" Y="190" Width="140" Height="90"/>
+    <Appearance><FrameStyle>None</FrameStyle><ForegroundColor>Default</ForegroundColor><BackgroundColor>Default</BackgroundColor><BackgroundImage>None</BackgroundImage><Font>Default</Font></Appearance>
+    <Function ID="0"/>
+    <Action>Toggle</Action>
+   </Button>
+
+   <Properties>
+    <Size Width="1280" Height="720"/>
+    <GrandMaster ChannelMode="Intensity" ValueMode="Reduce" SliderMode="Normal"/>
+   </Properties>
+  </Frame>
+ </VirtualConsole>
+
+ <SimpleDesk>
+  <Engine/>
+ </SimpleDesk>
+</Workspace>
