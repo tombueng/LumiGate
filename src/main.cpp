@@ -211,9 +211,10 @@ struct Config {
     bool   autoUpdate;     // auto-install newer firmware when detected
 } cfg;
 
-// Channel labels — stored verbatim as a JSON object string {"1":"Front L",...}
-// The browser owns editing; the device just persists the blob it receives.
-static constexpr size_t LABELS_MAX = 3000;
+// Channel labels — stored verbatim as a JSON blob. The browser owns the
+// structure (now per output: {"0":{"1":"Front L"},"1":{...}}); the device just
+// persists what it receives. Sized for labels across all outputs.
+static constexpr size_t LABELS_MAX = 6000;
 static String g_labels = "{}";
 
 // ---------------------------------------------------------------------------
@@ -222,6 +223,15 @@ static String g_labels = "{}";
 // Per-output NVS keys are "o<i>_<field>" (e.g. "o0_tx", "o1_uni").
 static String okey(int i, const char* field) {
     return String('o') + i + '_' + field;
+}
+
+// An output with no TX GPIO can't drive a line and crashes esp_dmx on init
+// (tx=-1 is "no change", so the UART is left half-configured). Force any such
+// "enabled but pin-less" output off so it can never brick the device.
+static void sanitizeOutputs() {
+    for (int i = 0; i < MAX_OUTPUTS; i++)
+        if (cfg.outputs[i].enabled && cfg.outputs[i].txPin < 0)
+            cfg.outputs[i].enabled = false;
 }
 
 static void loadConfig() {
@@ -262,6 +272,7 @@ static void loadConfig() {
     cfg.autoUpdate  = prefs.getBool("autoupd",   false);
     g_labels        = prefs.getString("labels",  "{}");
     prefs.end();
+    sanitizeOutputs();
 }
 
 static void saveConfig() {
@@ -349,15 +360,26 @@ static String ipStr(uint32_t ip) {
     return String(buf);
 }
 
+// The web monitor views/controls one output. monitorOut can go stale (e.g. its
+// output was later disabled), so always resolve to a currently-enabled output —
+// the monitor must never show or drive an empty/disabled buffer.
+static int viewOutput() {
+    if (monitorOut >= 0 && monitorOut < MAX_OUTPUTS && cfg.outputs[monitorOut].enabled)
+        return monitorOut;
+    for (int i = 0; i < MAX_OUTPUTS; i++) if (cfg.outputs[i].enabled) return i;
+    return 0;
+}
+
 static void sendDmx() {
     if (!dmxReady) return;
     bool ovActive = identifyCh && millis() < identifyUntil;
+    int  vo = viewOutput();
     for (int i = 0; i < MAX_OUTPUTS; i++) {
         if (!outReady[i]) continue;
         dmx_port_t port = (dmx_port_t)cfg.outputs[i].port;
         // Identify override: force one channel to full on the wire only (on the
         // monitored output), without corrupting the stored value the UI sees.
-        bool ov = ovActive && i == monitorOut;
+        bool ov = ovActive && i == vo;
         uint8_t saved = 0;
         if (ov) { saved = dmxBuf[i][identifyCh]; dmxBuf[i][identifyCh] = 255; }
         dmx_write(port, dmxBuf[i], DMX_PACKET_SIZE);
@@ -657,7 +679,7 @@ static void wsPush() {
     wsBuf[12] = activeSenderCount();
     wsBuf[13] = hasConflict() ? 1 : 0;
     wsBuf[14] = jitI >> 8;  wsBuf[15] = jitI & 0xFF;
-    memcpy(&wsBuf[16], &dmxBuf[monitorOut][1], 512);   // stream the viewed output
+    memcpy(&wsBuf[16], &dmxBuf[viewOutput()][1], 512);   // stream the viewed output
     // Only push if the async TCP queues have room, so a slow client never
     // backs up memory or blocks.
     if (ws.availableForWriteAll()) ws.binaryAll(wsBuf, 528);
@@ -675,12 +697,12 @@ static void handleWsText(const char* payload, size_t len) {
         int k = msg.indexOf("\"out\":");
         if (k >= 0) {
             int o = msg.substring(k + 6).toInt();
-            if (o >= 0 && o < MAX_OUTPUTS) monitorOut = o;
+            if (o >= 0 && o < MAX_OUTPUTS && cfg.outputs[o].enabled) monitorOut = o;
         }
         return;
     }
     if (msg.indexOf("\"blackout\"") >= 0) {
-        memset(&dmxBuf[monitorOut][1], 0, 512); return;
+        memset(&dmxBuf[viewOutput()][1], 0, 512); return;
     }
     if (msg.indexOf("\"mode\"") >= 0) {
         manualMode = (msg.indexOf("true") >= 0); return;
@@ -701,7 +723,7 @@ static void handleWsText(const char* payload, size_t len) {
         int ch  = msg.substring(chIdx  + 5).toInt();
         int val = msg.substring(valIdx + 6).toInt();
         if (ch < 1 || ch > 512) return;
-        dmxBuf[monitorOut][ch] = (uint8_t)constrain(val, 0, 255);
+        dmxBuf[viewOutput()][ch] = (uint8_t)constrain(val, 0, 255);
         return;
     }
     // RDM control — only set request flags here; loop() owns the bus and runs them.
@@ -748,7 +770,7 @@ static void onWsEvent(AsyncWebSocket*, AsyncWebSocketClient*, AwsEventType type,
 // Copy an incoming frame into one output's buffer. The monitored output is
 // frozen while manual mode is on (the web UI owns it then).
 static void applyToOutput(int outIdx, const uint8_t* data, uint16_t length) {
-    if (manualMode && outIdx == monitorOut) return;
+    if (manualMode && outIdx == viewOutput()) return;
     memcpy(&dmxBuf[outIdx][1], data, min((uint16_t)512, length));
 }
 
@@ -761,7 +783,7 @@ static void routeFrame(int artUniverse, const uint8_t* data, uint16_t length,
     for (int i = 0; i < MAX_OUTPUTS; i++) {
         if (!cfg.outputs[i].enabled || cfg.outputs[i].universe != artUniverse) continue;
         // Log changes for the viewed output before its buffer is overwritten.
-        if (i == monitorOut) maybeLog(i, data, length, senderIp, proto);
+        if (i == viewOutput()) maybeLog(i, data, length, senderIp, proto);
         applyToOutput(i, data, length);
         matched = true;
     }
@@ -1013,7 +1035,7 @@ static void handleDmxJson(AsyncWebServerRequest* req) {
     j += ",\"manual\":"; j += manualMode ? "true" : "false";
     j += ",\"ch\":[";
     for (int i = 1; i <= 512; i++) {
-        j += dmxBuf[monitorOut][i];
+        j += dmxBuf[viewOutput()][i];
         if (i < 512) j += ',';
     }
     j += "]}";
@@ -1099,6 +1121,7 @@ static void handleConfigPost(AsyncWebServerRequest* req) {
     if (argStr(req, "gateway", s)) cfg.gateway = s;
     if (argStr(req, "subnet", s))  cfg.subnet  = s;
     if (argStr(req, "dns", s))     cfg.dns     = s;
+    sanitizeOutputs();   // never persist an enabled output with no TX pin
     dmxReady = false;
     saveConfig();
     req->send_P(200, "text/html", CONFIG_SAVED_HTML);
@@ -1377,6 +1400,15 @@ static void initDmx() {
         outReady[i] = false;
         if (!cfg.outputs[i].enabled) continue;
 
+        // A DMX output must have a real TX GPIO. esp_dmx treats tx=-1 as
+        // "no change", so installing a driver with no TX pin half-configures
+        // the UART and crashes on the first send — a boot loop. Skip it.
+        if (cfg.outputs[i].txPin < 0) {
+            Serial.printf("[DMX] out%d skipped: enabled but no TX pin (tx=%d)\n",
+                          i, cfg.outputs[i].txPin);
+            continue;
+        }
+
         // Two outputs cannot share a UART port; skip the colliding one.
         bool dup = false;
         for (int j = 0; j < i; j++)
@@ -1404,6 +1436,38 @@ static void initDmx() {
     }
     if (!dmxReady) Serial.println("[DMX] no outputs enabled");
     else Serial.printf("[DMX] ready (monitor=out%d rdm=out%d)\n", monitorOut, rdmOut);
+}
+
+// ---------------------------------------------------------------------------
+// Safe-boot guard around DMX init
+// A bad port/pin can make esp_dmx panic *inside* driver install — an
+// uncatchable CPU exception that would otherwise boot-loop forever. We persist
+// a crash counter before touching the UART and clear it only after init
+// returns. If a previous boot died mid-init the counter survives the reboot, so
+// we progressively disable outputs until the device always reaches the web UI:
+//   >=2 consecutive  -> disable the extra output(s), keep output A
+//   >=4 consecutive  -> disable all DMX outputs
+// A single transient crash is tolerated (counter clears on the next good boot).
+// ---------------------------------------------------------------------------
+static void dmxInitGuardBegin() {
+    prefs.begin(PREF_NS, false);
+    int crashes = prefs.getInt("dmxcrash", 0);
+    prefs.putInt("dmxcrash", crashes + 1);   // committed before the UART is touched
+    prefs.end();
+    if (crashes >= 4) {
+        for (int i = 0; i < MAX_OUTPUTS; i++) cfg.outputs[i].enabled = false;
+        Serial.printf("[SAFE] %d DMX-init crashes — all outputs disabled\n", crashes);
+        saveConfig();
+    } else if (crashes >= 2) {
+        for (int i = 1; i < MAX_OUTPUTS; i++) cfg.outputs[i].enabled = false;
+        Serial.printf("[SAFE] %d DMX-init crashes — extra outputs disabled, keeping output A\n", crashes);
+        saveConfig();
+    }
+}
+static void dmxInitGuardEnd() {
+    prefs.begin(PREF_NS, false);
+    prefs.putInt("dmxcrash", 0);             // init survived — clear the counter
+    prefs.end();
 }
 
 static void initOTA() {
@@ -1507,7 +1571,9 @@ void setup() {
         Serial.printf("[mDNS] %s.local\n", cfg.hostname.c_str());
     }
 
+    dmxInitGuardBegin();   // recover automatically if a bad output config panics init
     initDmx();
+    dmxInitGuardEnd();
     initOTA();
 
     if (cfg.protocol != 1) {

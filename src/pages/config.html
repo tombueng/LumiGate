@@ -355,6 +355,21 @@ fetch('/info.json').then(function(r){ return r.json(); }).then(function(d){
   loadVersions();
 }).catch(function(){ buildOutputs([{en:true,uni:0,port:1,tx:17,rx:16,rts:-1},{en:false,uni:1,port:2,tx:-1,rx:-1,rts:-1}]); $('save-btn').disabled = false; loadVersions(); });
 
+// Guard: never submit an enabled output with no TX pin — it can't drive a line
+// and the device refuses it anyway. Catch it here with a clear message.
+document.querySelector('form[action="/config"]').addEventListener('submit', function(e){
+  var bad = [];
+  document.querySelectorAll('.out-card').forEach(function(card, i){
+    if (card.querySelector('.out-en').checked && +card.querySelector('.out-tx').value < 0)
+      bad.push('Output ' + String.fromCharCode(65 + i));
+  });
+  if (bad.length){
+    e.preventDefault();
+    alert(bad.join(' and ') + ': enabled but no TX pin set.\n\n'
+      + 'Set a TX GPIO (0 or higher), or turn the output off. TX = −1 means "no data line".');
+  }
+});
+
 $('proto-sel').addEventListener('change', updAllUniHints);
 $('static-sw').addEventListener('change', updStatic);
 $('led-type').addEventListener('change', updLedPin);

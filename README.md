@@ -572,16 +572,37 @@ multi-universe input, **Art-Net is recommended** (single UDP socket, no IGMP); s
 > **WT32-ETH01:** the Ethernet PHY consumes most GPIOs, so a second output is best run
 > output-only (TX, no RX/RDM).
 
-**Board defaults** (applied on first boot; overrideable in the web UI):
+### Per-board defaults & capabilities
 
-| Board | TX | RX | RTS |
-|---|---|---|---|
-| ESP32 DevKit / ESP32-S3 | GPIO17 | GPIO16 | −1 |
-| WT32-ETH01 | GPIO4 | GPIO5 | −1 |
+Applied on first boot; everything is overrideable in the web UI (no recompile).
 
-> GPIO16 is used by the LAN8720 Ethernet PHY on the WT32-ETH01, so the default pins are shifted.
+| Board | Build env | Net | Outputs | Output A — TX / RX / RTS | Suggested Output B | Notes |
+|---|---|---|---|---|---|---|
+| ESP32 DevKit (WROOM-32) | `esp32dev` | WiFi | 2 | GPIO17 / 16 / −1 | UART2, TX 32, RX 33 | Plenty of free GPIO; RDM possible on both |
+| ESP32-S3 DevKitC-1 | `esp32s3dev` | WiFi | 2 | GPIO17 / 16 / −1 | UART2, TX 18 (RX −1) | LED = WS2812 on GPIO48 |
+| WT32-ETH01 | `wt32eth01` | Ethernet | 2 | GPIO4 / 5 / −1 | UART2, TX-only | GPIO16 = LAN8720 PHY power, so pins are shifted; 2nd output best TX-only (no RX/RDM) |
 
-**Using a different RS485 module?** Connect your module's RXD (data-in) pin to the TX GPIO and its TXD (data-out) pin to the RX GPIO, then update Settings → DMX Output Pins to match.
+> **All three boards drive two outputs** (UART1 + UART2). A 2nd output (UART2) used to panic on the
+> ESP32-S3 — a latent **esp_dmx 4.1.0 bug** where the UART2 entry was guarded by an enum the
+> preprocessor reads as 0, so it was compiled out (null peripheral pointer). Fixed by a build-time
+> patch in [`extra_scripts.py`](extra_scripts.py).
+
+**ESP32-S3 — safe GPIOs for a 2nd output:** free choices are **5, 6, 7, 8, 15, 18, 21**. Avoid
+**26–37** (SPI flash / octal PSRAM — *will* crash), **19/20** (USB), **43/44** (serial console),
+**0/45/46** (strapping), **48** (WS2812 LED), and Output A's **16/17**.
+
+**Using a different RS485 module?** Wire your module's DI (data-in) to the TX GPIO and RO (data-out)
+to the RX GPIO, then set the pins under Settings → DMX Outputs.
+
+### Upgrade & crash safety
+
+- **Existing single-universe devices are unaffected by the update.** Migration maps the old
+  single-output config to **Output A** and leaves **Output B disabled**, so exactly one driver is
+  installed on UART1 — byte-for-byte the same path as before.
+- **No configuration can brick the device.** A safe-boot guard persists a crash counter around DMX
+  init; if init ever panics (a bad pin/port), the next boots progressively disable outputs (keep
+  A → all off) until the web UI is reachable. An enabled output with no TX pin is sanitized off
+  automatically (firmware + a client-side check).
 
 ---
 
@@ -599,6 +620,20 @@ multi-universe input, **Art-Net is recommended** (single UDP socket, no IGMP); s
 | LED type / GPIO pin | board default | Web `/config` (Status LED) |
 | Per-output: enabled / universe / UART port / TX / RX / RTS | A on (uni 0, UART1, TX=17, RX=16, RTS=−1); B off | Web `/config` (DMX Outputs) |
 | WiFi credentials | — | Config portal or `/reset` |
+
+---
+
+## Testing
+
+End-to-end Playwright tests drive a **live device** — they inject real Art-Net and sACN/E1.31
+packets over the network and assert the REST API, WebSocket and web UI react correctly (Art-Net/sACN
+→ DMX, sender tracking, conflict banner, change log, manual override + blackout, labels, and the
+2-output feature). See [`docs/tests/README.md`](docs/tests/README.md).
+
+```bash
+cd docs && npm install && npx playwright install chromium
+LUMIGATE_HOST=dmx-gateway.local npm test
+```
 
 ---
 

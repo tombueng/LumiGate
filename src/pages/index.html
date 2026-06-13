@@ -177,10 +177,9 @@ footer a:hover { color: var(--gh-text); }
   <!-- Controls -->
   <div class="card mb-3">
     <div class="card-body py-2 d-flex align-items-center flex-wrap gap-3">
-      <div class="d-flex align-items-center gap-2 mb-0" id="out-sel-wrap" style="display:none">
-        <label class="mb-0 small text-secondary" for="out-sel">View</label>
-        <select class="form-select form-select-sm" id="out-sel" style="width:auto"
-                onchange="setViewOut(+this.value)"></select>
+      <div class="align-items-center gap-2 mb-0" id="out-sel-wrap" style="display:none">
+        <span class="mb-0 small text-secondary">View</span>
+        <div class="btn-group btn-group-sm" id="out-sel" role="group" aria-label="Output view"></div>
       </div>
       <div class="form-check form-switch mb-0">
         <input class="form-check-input" type="checkbox" id="modeSwitch" role="switch"
@@ -301,7 +300,8 @@ footer a:hover { color: var(--gh-text); }
 <script>
 const dmx = new Uint8Array(512);
 let activeCh = 0, sock;
-let labels = {};   // { "1": "Front L", ... }
+let labels = {};      // labels for the currently-viewed output: { "1": "Front L", ... }
+let allLabels = {};   // per-output: { "0": {"1":"Front L"}, "1": {...} } — each line has its own fixtures
 let devInfo = {};  // filled from /info.json
 
 // Outputs (enabled universes) and which one the monitor is currently viewing.
@@ -322,18 +322,31 @@ function updNavSub(){
 function setViewOut(idx){
   viewOut = idx;
   if (sock && sock.readyState === 1) sock.send(JSON.stringify({type:'viewout', out: idx}));
+  labels = allLabels[viewOut] || {};   // each output has its own fixture names
+  applyLabels();
+  markActiveOut();
   updNavSub();
+}
+function markActiveOut(){
+  document.querySelectorAll('#out-sel button').forEach(function(b){
+    var on = +b.dataset.out === viewOut;
+    b.classList.toggle('btn-primary', on);
+    b.classList.toggle('btn-outline-secondary', !on);
+  });
 }
 function buildOutSelector(){
   var wrap = document.getElementById('out-sel-wrap');
-  var sel  = document.getElementById('out-sel');
+  var grp  = document.getElementById('out-sel');
   if (outputs.length < 2) { wrap.style.display = 'none'; return; }
-  sel.innerHTML = outputs.map(function(o){
-    return '<option value="' + o.idx + '">Output ' + String.fromCharCode(65 + o.idx) +
-           ' · Universe ' + o.uni + '</option>';
+  grp.innerHTML = outputs.map(function(o){
+    return '<button type="button" class="btn btn-outline-secondary" data-out="' + o.idx +
+           '">Output ' + String.fromCharCode(65 + o.idx) + ' · U' + o.uni + '</button>';
   }).join('');
-  sel.value = viewOut;
-  wrap.style.display = '';
+  grp.querySelectorAll('button').forEach(function(b){
+    b.addEventListener('click', function(){ setViewOut(+b.dataset.out); });
+  });
+  markActiveOut();
+  wrap.style.display = 'flex';
 }
 
 // Device info for the nav subtitle (served statically now; values via JSON)
@@ -375,18 +388,30 @@ function applyLabels() {
     el.classList.toggle('labeled', !!lbl);
   }
 }
+// Labels are stored per output. A legacy flat {ch:name} blob (string values) is
+// migrated to {"0":{...}} so existing single-universe labels stay on Output A.
+function isNestedLabels(o){
+  for (var k in o) return typeof o[k] === 'object' && o[k] !== null;
+  return false;
+}
 function loadLabels() {
   fetch('/labels.json').then(function(r){ return r.json(); })
-    .then(function(d){ labels = d || {}; applyLabels(); }).catch(function(){});
+    .then(function(d){
+      d = d || {};
+      allLabels = isNestedLabels(d) ? d : { '0': d };
+      labels = allLabels[viewOut] || {};
+      applyLabels();
+    }).catch(function(){});
 }
 function saveLabel() {
   const v = document.getElementById('ch-label').value.trim();
   if (v) labels[activeCh] = v; else delete labels[activeCh];
+  allLabels[viewOut] = labels;
   applyLabels();
   document.getElementById('modal-title').textContent =
     'Channel ' + activeCh + (labels[activeCh] ? ' — ' + labels[activeCh] : '');
   fetch('/labels', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                     body: JSON.stringify(labels) }).catch(function(){});
+                     body: JSON.stringify(allLabels) }).catch(function(){});
 }
 function identify() { send({type: 'identify', ch: activeCh}); }
 loadLabels();

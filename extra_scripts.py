@@ -55,6 +55,30 @@ def binary_to_header(path: pathlib.Path, out_dir: pathlib.Path, type_suffix: str
     out.write_text(h, encoding="utf-8")
     print(f"  [embed] {path.name} -> {out.name}  ({len(data)} bytes)")
 
+def patch_esp_dmx():
+    """Fix an esp_dmx 4.1.0 bug that crashes a 2nd DMX port (UART2).
+
+    Its dmx_uart_context[] guards the UART2 entry with `#if DMX_NUM_MAX > 2`,
+    but DMX_NUM_MAX is an *enum* constant — invisible to the preprocessor, which
+    reads it as 0 — so `0 > 2` is false and the UART2 entry is never compiled,
+    even though the array is sized for it. Result: dmx_uart_context[2].dev is
+    NULL and installing a driver on port 2 panics (LoadProhibited). The array's
+    own size and types.h both use the real macro SOC_UART_NUM, so rewrite the
+    guard to match. Idempotent; safe to run every build.
+    """
+    libdeps = pathlib.Path(env.subst("$PROJECT_LIBDEPS_DIR")) / env.subst("$PIOENV")
+    uart_c = libdeps / "esp_dmx" / "src" / "dmx" / "hal" / "uart.c"
+    if not uart_c.exists():
+        print(f"  [patch] esp_dmx uart.c not present yet — skipped ({uart_c})")
+        return
+    text = uart_c.read_text(encoding="utf-8")
+    if "#if DMX_NUM_MAX > 2" in text:
+        uart_c.write_text(text.replace("#if DMX_NUM_MAX > 2", "#if SOC_UART_NUM > 2"),
+                          encoding="utf-8")
+        print("  [patch] esp_dmx uart.c: UART2 guard DMX_NUM_MAX -> SOC_UART_NUM")
+    else:
+        print("  [patch] esp_dmx uart.c: already patched")
+
 def generate_version(gen_dir: pathlib.Path):
     version = os.environ.get("LUMIGATE_VERSION", "dev")
     (gen_dir / "version.h").write_text(
@@ -68,6 +92,7 @@ def generate():
     gen_dir = root / "src" / "generated"
     gen_dir.mkdir(exist_ok=True)
     print("LumiGate: generating embedded assets...")
+    patch_esp_dmx()
     generate_version(gen_dir)
     for f in sorted((root / "src" / "pages").glob("*.html")):
         html_to_header(f, gen_dir)
