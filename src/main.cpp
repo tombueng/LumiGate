@@ -59,6 +59,22 @@
 #define DEF_DMX_PORT 1
 #endif
 
+// ---------------------------------------------------------------------------
+// DMX outputs — up to MAX_OUTPUTS independent universes, each driven by its own
+// hardware UART + RS485 transceiver. Hardware ceiling is 2: the ESP32 / ESP32-S3
+// expose 3 UARTs and UART0 is the serial console, leaving UART1 + UART2.
+// ---------------------------------------------------------------------------
+static constexpr int MAX_OUTPUTS = 2;
+
+struct DmxOutput {
+    bool enabled;
+    int  universe;   // Art-Net universe; sACN listens on (universe + 1)
+    int  port;       // dmx_port_t: 1 or 2
+    int  txPin;
+    int  rxPin;      // -1 = output only (no RDM)
+    int  rtsPin;     // -1 = auto-direction module / no RDM
+};
+
 static constexpr int BOOT_PIN = 0;
 static constexpr uint32_t   HOLD_MS     = 3000;
 
@@ -104,6 +120,7 @@ struct LogEntry {
     uint32_t ms;
     uint32_t ip;
     uint8_t  proto;
+    uint8_t  uni;     // Art-Net universe this frame targeted
     uint8_t  topN;    // valid entries in top[]
     uint16_t total;   // total channels changed
     struct { uint16_t ch; uint8_t val; } top[LOG_TOP];
@@ -141,13 +158,16 @@ Preferences       prefs;
 AsyncWebServer    http(80);
 AsyncWebSocket    ws("/ws");
 ArtnetWifi        artnet;
-static WiFiUDP   sacnUdp;
+static WiFiUDP   sacnUdp[MAX_OUTPUTS];   // one multicast socket per output universe
 static Adafruit_NeoPixel neoPixel(1, 0, NEO_GRB + NEO_KHZ800);
 
 // ---------------------------------------------------------------------------
 // Runtime state
 // ---------------------------------------------------------------------------
-static uint8_t  dmxBuf[DMX_PACKET_SIZE] = {0};
+static uint8_t  dmxBuf[MAX_OUTPUTS][DMX_PACKET_SIZE] = {{0}};
+static bool     outReady[MAX_OUTPUTS] = {false};   // per-output DMX driver installed
+static int      monitorOut   = 0;                  // output shown/controlled by the web UI
+static int      rdmOut       = -1;                 // output RDM runs on, -1 = none
 static uint32_t lastFrameMs  = 0;
 static uint32_t frameCount   = 0;
 static float    fps          = 0.0f;
@@ -177,16 +197,12 @@ static uint8_t wsBuf[528];
 static uint8_t sacnBuf[638];
 
 struct Config {
-    int    universe;
     String hostname;
     String otaPassword;
     int    protocol;
     int    ledPin;
     int    ledType;
-    int    dmxPort;
-    int    dmxTxPin;
-    int    dmxRxPin;
-    int    dmxRtsPin;
+    DmxOutput outputs[MAX_OUTPUTS];
     bool   staticIp;       // false = DHCP
     String ip;             // dotted-quad strings; empty when unused
     String gateway;
@@ -203,18 +219,41 @@ static String g_labels = "{}";
 // ---------------------------------------------------------------------------
 // Config persistence
 // ---------------------------------------------------------------------------
+// Per-output NVS keys are "o<i>_<field>" (e.g. "o0_tx", "o1_uni").
+static String okey(int i, const char* field) {
+    return String('o') + i + '_' + field;
+}
+
 static void loadConfig() {
     prefs.begin(PREF_NS, false);
-    cfg.universe    = prefs.getInt("universe",  DEF_UNIVERSE);
     cfg.hostname    = prefs.getString("hostname", DEF_HOSTNAME);
     cfg.otaPassword = prefs.getString("otapw",   DEF_OTA_PW);
     cfg.protocol    = prefs.getInt("protocol",  DEF_PROTOCOL);
     cfg.ledPin      = prefs.getInt("ledpin",    DEF_LED_PIN);
     cfg.ledType     = prefs.getInt("ledtype",   DEF_LED_TYPE);
-    cfg.dmxPort     = constrain(prefs.getInt("dmxport",  DEF_DMX_PORT),  1, 2);
-    cfg.dmxTxPin    = constrain(prefs.getInt("dmxtx",   DEF_DMX_TX_PIN), -1, 48);
-    cfg.dmxRxPin    = constrain(prefs.getInt("dmxrx",   DEF_DMX_RX_PIN), -1, 48);
-    cfg.dmxRtsPin   = constrain(prefs.getInt("dmxrts",  DEF_DMX_RTS_PIN),-1, 48);
+
+    // Output 0 falls back to the legacy single-universe keys, so devices
+    // updated from an older firmware keep their existing DMX setup untouched.
+    // Output 1 ships disabled. Once saved, the new o<i>_* keys take over.
+    cfg.outputs[0].enabled  = prefs.getBool(okey(0,"en").c_str(),  true);
+    cfg.outputs[0].universe = constrain(prefs.getInt(okey(0,"uni").c_str(),
+                                  prefs.getInt("universe", DEF_UNIVERSE)), 0, 15);
+    cfg.outputs[0].port     = constrain(prefs.getInt(okey(0,"port").c_str(),
+                                  prefs.getInt("dmxport", DEF_DMX_PORT)), 1, 2);
+    cfg.outputs[0].txPin    = constrain(prefs.getInt(okey(0,"tx").c_str(),
+                                  prefs.getInt("dmxtx", DEF_DMX_TX_PIN)), -1, 48);
+    cfg.outputs[0].rxPin    = constrain(prefs.getInt(okey(0,"rx").c_str(),
+                                  prefs.getInt("dmxrx", DEF_DMX_RX_PIN)), -1, 48);
+    cfg.outputs[0].rtsPin   = constrain(prefs.getInt(okey(0,"rts").c_str(),
+                                  prefs.getInt("dmxrts", DEF_DMX_RTS_PIN)), -1, 48);
+
+    cfg.outputs[1].enabled  = prefs.getBool(okey(1,"en").c_str(),  false);
+    cfg.outputs[1].universe = constrain(prefs.getInt(okey(1,"uni").c_str(),  DEF_UNIVERSE + 1), 0, 15);
+    cfg.outputs[1].port     = constrain(prefs.getInt(okey(1,"port").c_str(), 2), 1, 2);
+    cfg.outputs[1].txPin    = constrain(prefs.getInt(okey(1,"tx").c_str(),  -1), -1, 48);
+    cfg.outputs[1].rxPin    = constrain(prefs.getInt(okey(1,"rx").c_str(),  -1), -1, 48);
+    cfg.outputs[1].rtsPin   = constrain(prefs.getInt(okey(1,"rts").c_str(), -1), -1, 48);
+
     cfg.staticIp    = prefs.getBool("staticip", false);
     cfg.ip          = prefs.getString("ip",      "");
     cfg.gateway     = prefs.getString("gateway", "");
@@ -227,16 +266,19 @@ static void loadConfig() {
 
 static void saveConfig() {
     prefs.begin(PREF_NS, false);
-    prefs.putInt("universe",    cfg.universe);
     prefs.putString("hostname", cfg.hostname);
     prefs.putString("otapw",    cfg.otaPassword);
     prefs.putInt("protocol",    cfg.protocol);
     prefs.putInt("ledpin",      cfg.ledPin);
     prefs.putInt("ledtype",     cfg.ledType);
-    prefs.putInt("dmxport",     cfg.dmxPort);
-    prefs.putInt("dmxtx",       cfg.dmxTxPin);
-    prefs.putInt("dmxrx",       cfg.dmxRxPin);
-    prefs.putInt("dmxrts",      cfg.dmxRtsPin);
+    for (int i = 0; i < MAX_OUTPUTS; i++) {
+        prefs.putBool(okey(i,"en").c_str(),   cfg.outputs[i].enabled);
+        prefs.putInt(okey(i,"uni").c_str(),   cfg.outputs[i].universe);
+        prefs.putInt(okey(i,"port").c_str(),  cfg.outputs[i].port);
+        prefs.putInt(okey(i,"tx").c_str(),    cfg.outputs[i].txPin);
+        prefs.putInt(okey(i,"rx").c_str(),    cfg.outputs[i].rxPin);
+        prefs.putInt(okey(i,"rts").c_str(),   cfg.outputs[i].rtsPin);
+    }
     prefs.putBool("staticip",   cfg.staticIp);
     prefs.putString("ip",       cfg.ip);
     prefs.putString("gateway",  cfg.gateway);
@@ -309,22 +351,28 @@ static String ipStr(uint32_t ip) {
 
 static void sendDmx() {
     if (!dmxReady) return;
-    // Identify override: force one channel to full on the wire only,
-    // without corrupting the stored value the UI/Art-Net see.
-    bool ov = identifyCh && millis() < identifyUntil;
-    uint8_t saved = 0;
-    if (ov) { saved = dmxBuf[identifyCh]; dmxBuf[identifyCh] = 255; }
-    dmx_write((dmx_port_t)cfg.dmxPort, dmxBuf, DMX_PACKET_SIZE);
-    dmx_send((dmx_port_t)cfg.dmxPort);
-    dmx_wait_sent((dmx_port_t)cfg.dmxPort, DMX_TIMEOUT_TICK);
-    if (ov) dmxBuf[identifyCh] = saved;
+    bool ovActive = identifyCh && millis() < identifyUntil;
+    for (int i = 0; i < MAX_OUTPUTS; i++) {
+        if (!outReady[i]) continue;
+        dmx_port_t port = (dmx_port_t)cfg.outputs[i].port;
+        // Identify override: force one channel to full on the wire only (on the
+        // monitored output), without corrupting the stored value the UI sees.
+        bool ov = ovActive && i == monitorOut;
+        uint8_t saved = 0;
+        if (ov) { saved = dmxBuf[i][identifyCh]; dmxBuf[i][identifyCh] = 255; }
+        dmx_write(port, dmxBuf[i], DMX_PACKET_SIZE);
+        dmx_send(port);
+        dmx_wait_sent(port, DMX_TIMEOUT_TICK);
+        if (ov) dmxBuf[i][identifyCh] = saved;
+    }
 }
 
 // ---------------------------------------------------------------------------
 // RDM (E1.20) controller — discovery + GET/SET on the physical DMX line.
-// Needs a transceiver with a GPIO-controlled direction pin (cfg.dmxRtsPin, the
-// esp_dmx "enable" line). All bus access runs on loop()'s thread — the only
-// owner of the DMX port — so the async web/WS task just sets request flags.
+// Bound to a single output (rdmOut): the first enabled output with a direction-
+// enable pin set (the esp_dmx "enable" line). All bus access runs on loop()'s
+// thread — the only owner of the DMX port — so the async web/WS task just sets
+// request flags.
 // ---------------------------------------------------------------------------
 static constexpr int RDM_MAX_SENSORS = 4;        // sensors stored per fixture
 struct RdmSensor {
@@ -363,7 +411,7 @@ static volatile uint16_t rdmReqAddr = 1;
 static volatile bool rdmReqOn       = false;
 
 // RDM only works when the DMX driver is up AND a direction-enable pin is set.
-static bool rdmAvailable() { return dmxReady && cfg.dmxRtsPin >= 0; }
+static bool rdmAvailable() { return dmxReady && rdmOut >= 0 && outReady[rdmOut]; }
 
 // Map E1.20 sensor unit / type enums to short display strings.
 static const char* rdmUnitStr(uint8_t u) {
@@ -423,7 +471,7 @@ static bool rdmParseUid(const String& msg, rdm_uid_t& out) {
 // Full discovery sweep + per-device GET device-info & software-version label.
 // Blocks the bus for the duration (~hundreds of ms) — DMX output pauses briefly.
 static void rdmDoDiscover() {
-    dmx_port_t port = (dmx_port_t)cfg.dmxPort;
+    dmx_port_t port = (dmx_port_t)cfg.outputs[rdmOut].port;
     rdmBusy = true;
     rdm_uid_t uids[RDM_MAX_DEVICES];
     int n = rdm_discover_devices_simple(port, uids, RDM_MAX_DEVICES);
@@ -487,7 +535,7 @@ static void rdmDoDiscover() {
 // Called once per loop() iteration; does work only when a request is queued.
 static void rdmService() {
     if (!rdmAvailable()) return;
-    dmx_port_t port = (dmx_port_t)cfg.dmxPort;
+    dmx_port_t port = (dmx_port_t)cfg.outputs[rdmOut].port;
     rdm_ack_t ack;
 
     if (rdmSetAddrReq) {
@@ -558,7 +606,7 @@ static bool hasConflict() { return activeSenderCount() > 1; }
 // ---------------------------------------------------------------------------
 // Change log
 // ---------------------------------------------------------------------------
-static void maybeLog(const uint8_t* data, uint16_t len, uint32_t ip, uint8_t proto) {
+static void maybeLog(int outIdx, const uint8_t* data, uint16_t len, uint32_t ip, uint8_t proto) {
     uint32_t now = millis();
     if (now - lastLogMs < 200) return;
 
@@ -566,11 +614,12 @@ static void maybeLog(const uint8_t* data, uint16_t len, uint32_t ip, uint8_t pro
     e.ms    = now;
     e.ip    = ip;
     e.proto = proto;
+    e.uni   = (uint8_t)cfg.outputs[outIdx].universe;
     e.total = 0;
     e.topN  = 0;
     uint16_t lim = len < 512 ? len : 512;
     for (int i = 0; i < lim; i++) {
-        if (data[i] != dmxBuf[i + 1]) {
+        if (data[i] != dmxBuf[outIdx][i + 1]) {
             e.total++;
             if (e.topN < LOG_TOP) {
                 e.top[e.topN].ch  = (uint16_t)(i + 1);
@@ -608,7 +657,7 @@ static void wsPush() {
     wsBuf[12] = activeSenderCount();
     wsBuf[13] = hasConflict() ? 1 : 0;
     wsBuf[14] = jitI >> 8;  wsBuf[15] = jitI & 0xFF;
-    memcpy(&wsBuf[16], &dmxBuf[1], 512);
+    memcpy(&wsBuf[16], &dmxBuf[monitorOut][1], 512);   // stream the viewed output
     // Only push if the async TCP queues have room, so a slow client never
     // backs up memory or blocks.
     if (ws.availableForWriteAll()) ws.binaryAll(wsBuf, 528);
@@ -620,9 +669,18 @@ static void wsPush() {
 // ---------------------------------------------------------------------------
 static void handleWsText(const char* payload, size_t len) {
     String msg(payload, len);
-    // Only update dmxBuf — loop()'s 40 Hz refresh outputs it.
+    // Manual control + the live monitor act on the viewed output (monitorOut);
+    // loop()'s 40 Hz refresh outputs every buffer.
+    if (msg.indexOf("\"viewout\"") >= 0) {
+        int k = msg.indexOf("\"out\":");
+        if (k >= 0) {
+            int o = msg.substring(k + 6).toInt();
+            if (o >= 0 && o < MAX_OUTPUTS) monitorOut = o;
+        }
+        return;
+    }
     if (msg.indexOf("\"blackout\"") >= 0) {
-        memset(&dmxBuf[1], 0, 512); return;
+        memset(&dmxBuf[monitorOut][1], 0, 512); return;
     }
     if (msg.indexOf("\"mode\"") >= 0) {
         manualMode = (msg.indexOf("true") >= 0); return;
@@ -643,7 +701,7 @@ static void handleWsText(const char* payload, size_t len) {
         int ch  = msg.substring(chIdx  + 5).toInt();
         int val = msg.substring(valIdx + 6).toInt();
         if (ch < 1 || ch > 512) return;
-        dmxBuf[ch] = (uint8_t)constrain(val, 0, 255);
+        dmxBuf[monitorOut][ch] = (uint8_t)constrain(val, 0, 255);
         return;
     }
     // RDM control — only set request flags here; loop() owns the bus and runs them.
@@ -687,22 +745,34 @@ static void onWsEvent(AsyncWebSocket*, AsyncWebSocketClient*, AwsEventType type,
 // ---------------------------------------------------------------------------
 // Shared DMX frame handler
 // ---------------------------------------------------------------------------
-static void onDmxFrame(const uint8_t* data, uint16_t length, uint32_t senderIp, uint8_t proto) {
+// Copy an incoming frame into one output's buffer. The monitored output is
+// frozen while manual mode is on (the web UI owns it then).
+static void applyToOutput(int outIdx, const uint8_t* data, uint16_t length) {
+    if (manualMode && outIdx == monitorOut) return;
+    memcpy(&dmxBuf[outIdx][1], data, min((uint16_t)512, length));
+}
+
+// Route one received universe to every enabled output mapped to it (so the
+// same universe on both outputs acts as a 1-in-2-out splitter), then update
+// the aggregate stats/sender tracking once per input frame.
+static void routeFrame(int artUniverse, const uint8_t* data, uint16_t length,
+                       uint32_t senderIp, uint8_t proto) {
+    bool matched = false;
+    for (int i = 0; i < MAX_OUTPUTS; i++) {
+        if (!cfg.outputs[i].enabled || cfg.outputs[i].universe != artUniverse) continue;
+        // Log changes for the viewed output before its buffer is overwritten.
+        if (i == monitorOut) maybeLog(i, data, length, senderIp, proto);
+        applyToOutput(i, data, length);
+        matched = true;
+    }
+    if (!matched) return;
+
     uint32_t now = millis();
 
     // [DEBUG] flag DMX reception gaps (input stalled)
     if (lastDmxMs && now - lastDmxMs > 300)
         Serial.printf("[GAP] dmx input gap=%lums proto=%d up=%lus\n",
             (unsigned long)(now - lastDmxMs), proto, (unsigned long)uptimeSec());
-
-    // Log changes before dmxBuf is overwritten (need old values for comparison)
-    maybeLog(data, length, senderIp, proto);
-
-    // Only update the buffer here; loop() refreshes the DMX wire at 40 Hz so
-    // brief input gaps (lost multicast) never interrupt the output.
-    if (!manualMode) {
-        memcpy(&dmxBuf[1], data, min((uint16_t)512, length));
-    }
 
     updateSender(senderIp, proto);
 
@@ -732,8 +802,7 @@ static void onDmxFrame(const uint8_t* data, uint16_t length, uint32_t senderIp, 
 // Art-Net callback
 // ---------------------------------------------------------------------------
 static void onArtDmx(uint16_t universe, uint16_t length, uint8_t, uint8_t* data) {
-    if ((int)universe != cfg.universe) return;
-    onDmxFrame(data, length, (uint32_t)artnet.getSenderIp(), 0);
+    routeFrame((int)universe, data, length, (uint32_t)artnet.getSenderIp(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -753,23 +822,31 @@ static const uint8_t ACN_PACKET_ID[12] = {
 };
 
 static void startSacn() {
-    sacnUdp.stop();
-    uint16_t sacnUniverse = (uint16_t)(cfg.universe + 1);
-    uint8_t  univHigh     = (uint8_t)((sacnUniverse >> 8) & 0xFF);
-    uint8_t  univLow      = (uint8_t)(sacnUniverse & 0xFF);
-    IPAddress mcast(239, 255, univHigh, univLow);
-    sacnUdp.beginMulticast(mcast, 5568);
-    Serial.printf("[sACN] universe %u  multicast 239.255.%u.%u:5568\n",
-                  sacnUniverse, univHigh, univLow);
+    // One multicast socket per enabled output, each joined to its universe's
+    // group (sACN universe = Art-Net universe + 1). Sockets share port 5568
+    // (WiFiUDP sets SO_REUSEADDR); lwip delivers each group to its joiner.
+    for (int i = 0; i < MAX_OUTPUTS; i++) {
+        sacnUdp[i].stop();
+        if (!cfg.outputs[i].enabled) continue;
+        uint16_t sacnUniverse = (uint16_t)(cfg.outputs[i].universe + 1);
+        uint8_t  univHigh     = (uint8_t)((sacnUniverse >> 8) & 0xFF);
+        uint8_t  univLow      = (uint8_t)(sacnUniverse & 0xFF);
+        IPAddress mcast(239, 255, univHigh, univLow);
+        sacnUdp[i].beginMulticast(mcast, 5568);
+        Serial.printf("[sACN] out%d universe %u  multicast 239.255.%u.%u:5568\n",
+                      i, sacnUniverse, univHigh, univLow);
+    }
 }
 
-static void readSacn() {
+// Validate + dispatch one sACN socket's pending packets to its output.
+static void readSacnSocket(int outIdx) {
+    WiFiUDP& udp = sacnUdp[outIdx];
     // Drain all packets buffered since the last call (catches up after any gap)
     for (int guard = 0; guard < 16; guard++) {
-        int pktLen = sacnUdp.parsePacket();
+        int pktLen = udp.parsePacket();
         if (pktLen < SACN_MIN_LEN) return;
-        uint32_t senderIp = (uint32_t)sacnUdp.remoteIP();
-        int n = sacnUdp.read(sacnBuf, sizeof(sacnBuf));
+        uint32_t senderIp = (uint32_t)udp.remoteIP();
+        int n = udp.read(sacnBuf, sizeof(sacnBuf));
         if (n < SACN_MIN_LEN) continue;
         if (memcmp(sacnBuf + SACN_ACN_ID_OFF, ACN_PACKET_ID, 12) != 0) continue;
         uint32_t rootVec = ((uint32_t)sacnBuf[SACN_ROOT_VEC_OFF    ] << 24)
@@ -784,10 +861,15 @@ static void readSacn() {
         if (frameVec != 0x00000002u) continue;
         uint16_t universe = ((uint16_t)sacnBuf[SACN_UNIVERSE_OFF] << 8)
                            | sacnBuf[SACN_UNIVERSE_OFF + 1];
-        if ((int)universe != cfg.universe + 1) continue;
+        if ((int)universe != cfg.outputs[outIdx].universe + 1) continue;
         if (sacnBuf[SACN_STARTCODE_OFF] != 0x00) continue;
-        onDmxFrame(sacnBuf + SACN_DATA_OFF, 512, senderIp, 1);
+        routeFrame((int)universe - 1, sacnBuf + SACN_DATA_OFF, 512, senderIp, 1);
     }
+}
+
+static void readSacn() {
+    for (int i = 0; i < MAX_OUTPUTS; i++)
+        if (cfg.outputs[i].enabled) readSacnSocket(i);
 }
 
 // ---------------------------------------------------------------------------
@@ -843,10 +925,10 @@ static String logJson() {
         LogEntry& e = dmxLog[idx];
         if (!first) j += ",";
         first = false;
-        char buf[64];
+        char buf[80];
         snprintf(buf, sizeof(buf),
-            "{\"ms\":%lu,\"ip\":\"%s\",\"p\":%d,\"n\":%d,\"ch\":[",
-            (unsigned long)e.ms, ipStr(e.ip).c_str(), (int)e.proto, (int)e.total);
+            "{\"ms\":%lu,\"ip\":\"%s\",\"p\":%d,\"u\":%d,\"n\":%d,\"ch\":[",
+            (unsigned long)e.ms, ipStr(e.ip).c_str(), (int)e.proto, (int)e.uni, (int)e.total);
         j += buf;
         for (int t = 0; t < e.topN; t++) {
             if (t > 0) j += ",";
@@ -891,14 +973,24 @@ static void handleInfoJson(AsyncWebServerRequest* req) {
     j += "\"hostname\":\""; j += cfg.hostname;           j += "\",";
     j += "\"version\":\"";  j += FIRMWARE_VERSION;       j += "\",";
     j += "\"otapw\":\"";    j += cfg.otaPassword;        j += "\",";
-    j += "\"universe\":";   j += cfg.universe;           j += ",";
+    j += "\"universe\":";   j += cfg.outputs[0].universe; j += ",";   // legacy/back-compat
     j += "\"protocol\":";   j += cfg.protocol;           j += ",";
     j += "\"ledType\":";    j += cfg.ledType;            j += ",";
     j += "\"ledPin\":";     j += cfg.ledPin;             j += ",";
-    j += "\"dmxPort\":";    j += cfg.dmxPort;            j += ",";
-    j += "\"dmxTxPin\":";   j += cfg.dmxTxPin;           j += ",";
-    j += "\"dmxRxPin\":";   j += cfg.dmxRxPin;           j += ",";
-    j += "\"dmxRtsPin\":";  j += cfg.dmxRtsPin;          j += ",";
+    j += "\"rdmOut\":";     j += rdmOut;                 j += ",";
+    j += "\"outputs\":[";
+    for (int i = 0; i < MAX_OUTPUTS; i++) {
+        const DmxOutput& o = cfg.outputs[i];
+        if (i) j += ",";
+        j += "{\"en\":";   j += o.enabled ? "true" : "false";
+        j += ",\"uni\":";  j += o.universe;
+        j += ",\"port\":"; j += o.port;
+        j += ",\"tx\":";   j += o.txPin;
+        j += ",\"rx\":";   j += o.rxPin;
+        j += ",\"rts\":";  j += o.rtsPin;
+        j += "}";
+    }
+    j += "],";
     j += "\"staticIp\":";   j += cfg.staticIp ? "true" : "false"; j += ",";
     j += "\"sip\":\"";      j += cfg.ip;                 j += "\",";
     j += "\"gateway\":\"";  j += cfg.gateway;            j += "\",";
@@ -921,7 +1013,7 @@ static void handleDmxJson(AsyncWebServerRequest* req) {
     j += ",\"manual\":"; j += manualMode ? "true" : "false";
     j += ",\"ch\":[";
     for (int i = 1; i <= 512; i++) {
-        j += dmxBuf[i];
+        j += dmxBuf[monitorOut][i];
         if (i < 512) j += ',';
     }
     j += "]}";
@@ -985,16 +1077,23 @@ static void handleConfigGet(AsyncWebServerRequest* req) {
 
 static void handleConfigPost(AsyncWebServerRequest* req) {
     String s;
-    if (argStr(req, "universe", s)) cfg.universe = constrain(s.toInt(), 0, 15);
     if (argStr(req, "hostname", s) && s.length() > 0) cfg.hostname = s;
     if (argStr(req, "otapw", s)    && s.length() > 0) cfg.otaPassword = s;
     if (argStr(req, "protocol", s)) cfg.protocol = constrain(s.toInt(), 0, 2);
     if (argStr(req, "ledtype", s))  cfg.ledType   = constrain(s.toInt(), 0, 2);
     if (argStr(req, "ledpin", s))   cfg.ledPin    = constrain(s.toInt(), -1, 48);
-    if (argStr(req, "dmxport", s))  cfg.dmxPort   = constrain(s.toInt(), 1, 2);
-    if (argStr(req, "dmxtx", s))    cfg.dmxTxPin  = constrain(s.toInt(), -1, 48);
-    if (argStr(req, "dmxrx", s))    cfg.dmxRxPin  = constrain(s.toInt(), -1, 48);
-    if (argStr(req, "dmxrts", s))   cfg.dmxRtsPin = constrain(s.toInt(), -1, 48);
+
+    // Per-output DMX config: o<i>_en / _uni / _port / _tx / _rx / _rts.
+    // A missing o<i>_en checkbox means that output is disabled.
+    for (int i = 0; i < MAX_OUTPUTS; i++) {
+        DmxOutput& o = cfg.outputs[i];
+        o.enabled = req->hasParam(okey(i,"en"), true) || req->hasParam(okey(i,"en"));
+        if (argStr(req, okey(i,"uni").c_str(),  s)) o.universe = constrain(s.toInt(), 0, 15);
+        if (argStr(req, okey(i,"port").c_str(), s)) o.port     = constrain(s.toInt(), 1, 2);
+        if (argStr(req, okey(i,"tx").c_str(),   s)) o.txPin    = constrain(s.toInt(), -1, 48);
+        if (argStr(req, okey(i,"rx").c_str(),   s)) o.rxPin    = constrain(s.toInt(), -1, 48);
+        if (argStr(req, okey(i,"rts").c_str(),  s)) o.rtsPin   = constrain(s.toInt(), -1, 48);
+    }
     cfg.staticIp = req->hasParam("staticip", true) || req->hasParam("staticip");
     if (argStr(req, "ip", s))      cfg.ip      = s;
     if (argStr(req, "gateway", s)) cfg.gateway = s;
@@ -1203,14 +1302,14 @@ static void startWiFiManager(bool forcePortal) {
         wm.setSTAStaticIPConfig(ip, gw, sn, dns);
         Serial.printf("[WiFi] static IP %s\n", cfg.ip.c_str());
     }
-    snprintf(wm_universeStr, sizeof(wm_universeStr), "%d", cfg.universe);
+    snprintf(wm_universeStr, sizeof(wm_universeStr), "%d", cfg.outputs[0].universe);
     WiFiManagerParameter param_universe("universe", "Art-Net Universe (0-15)", wm_universeStr, 3);
     wm.addParameter(&param_universe);
     bool connected = forcePortal ? wm.startConfigPortal(AP_SSID)
                                  : wm.autoConnect(AP_SSID);
     if (!connected) ESP.restart();
     if (wm_shouldSave) {
-        cfg.universe = constrain(atoi(param_universe.getValue()), 0, 15);
+        cfg.outputs[0].universe = constrain(atoi(param_universe.getValue()), 0, 15);
         saveConfig();
         // The captive-portal ran its own web server on port 80; it may not
         // release the socket cleanly, which would stop our AsyncWebServer from
@@ -1270,15 +1369,41 @@ static void connectStrongestAP() {
 // Peripheral init
 // ---------------------------------------------------------------------------
 static void initDmx() {
-    dmx_port_t port = (dmx_port_t)cfg.dmxPort;
-    dmx_config_t config = DMX_CONFIG_DEFAULT;
-    dmx_driver_install(port, &config, nullptr, 0);
-    dmx_set_pin(port, cfg.dmxTxPin, cfg.dmxRxPin, cfg.dmxRtsPin);
-    dmx_write(port, dmxBuf, DMX_PACKET_SIZE);
-    dmx_send(port);
-    dmx_wait_sent(port, DMX_TIMEOUT_TICK);
-    dmxReady = true;
-    Serial.println("[DMX] ready");
+    dmxReady = false;
+    rdmOut   = -1;
+    monitorOut = 0;
+    bool firstEnabled = true;
+    for (int i = 0; i < MAX_OUTPUTS; i++) {
+        outReady[i] = false;
+        if (!cfg.outputs[i].enabled) continue;
+
+        // Two outputs cannot share a UART port; skip the colliding one.
+        bool dup = false;
+        for (int j = 0; j < i; j++)
+            if (outReady[j] && cfg.outputs[j].port == cfg.outputs[i].port) dup = true;
+        if (dup) {
+            Serial.printf("[DMX] out%d skipped: port %d already in use\n", i, cfg.outputs[i].port);
+            continue;
+        }
+
+        dmx_port_t port = (dmx_port_t)cfg.outputs[i].port;
+        dmx_config_t config = DMX_CONFIG_DEFAULT;
+        dmx_driver_install(port, &config, nullptr, 0);
+        dmx_set_pin(port, cfg.outputs[i].txPin, cfg.outputs[i].rxPin, cfg.outputs[i].rtsPin);
+        dmx_write(port, dmxBuf[i], DMX_PACKET_SIZE);
+        dmx_send(port);
+        dmx_wait_sent(port, DMX_TIMEOUT_TICK);
+        outReady[i] = true;
+        dmxReady    = true;
+        if (firstEnabled) { monitorOut = i; firstEnabled = false; }
+        // RDM binds to the first enabled output with a direction-enable pin.
+        if (rdmOut < 0 && cfg.outputs[i].rtsPin >= 0) rdmOut = i;
+        Serial.printf("[DMX] out%d ready: uni=%d port=%d tx=%d rx=%d rts=%d\n",
+            i, cfg.outputs[i].universe, cfg.outputs[i].port,
+            cfg.outputs[i].txPin, cfg.outputs[i].rxPin, cfg.outputs[i].rtsPin);
+    }
+    if (!dmxReady) Serial.println("[DMX] no outputs enabled");
+    else Serial.printf("[DMX] ready (monitor=out%d rdm=out%d)\n", monitorOut, rdmOut);
 }
 
 static void initOTA() {
@@ -1388,7 +1513,8 @@ void setup() {
     if (cfg.protocol != 1) {
         artnet.setArtDmxCallback(onArtDmx);
         artnet.begin();
-        Serial.printf("[ArtNet] universe %d\n", cfg.universe);
+        Serial.printf("[ArtNet] out0 universe %d%s\n", cfg.outputs[0].universe,
+            cfg.outputs[1].enabled ? " (+out1)" : "");
     }
     if (cfg.protocol != 0) startSacn();
 

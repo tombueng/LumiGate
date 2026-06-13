@@ -177,6 +177,11 @@ footer a:hover { color: var(--gh-text); }
   <!-- Controls -->
   <div class="card mb-3">
     <div class="card-body py-2 d-flex align-items-center flex-wrap gap-3">
+      <div class="d-flex align-items-center gap-2 mb-0" id="out-sel-wrap" style="display:none">
+        <label class="mb-0 small text-secondary" for="out-sel">View</label>
+        <select class="form-select form-select-sm" id="out-sel" style="width:auto"
+                onchange="setViewOut(+this.value)"></select>
+      </div>
       <div class="form-check form-switch mb-0">
         <input class="form-check-input" type="checkbox" id="modeSwitch" role="switch"
                onchange="setMode(this.checked)">
@@ -299,12 +304,47 @@ let activeCh = 0, sock;
 let labels = {};   // { "1": "Front L", ... }
 let devInfo = {};  // filled from /info.json
 
+// Outputs (enabled universes) and which one the monitor is currently viewing.
+let outputs = [];     // [{idx, uni}] enabled outputs, from /info.json
+let viewOut = 0;      // device-side output index being streamed
+
+function outUniverse(idx){
+  for (var i = 0; i < outputs.length; i++) if (outputs[i].idx === idx) return outputs[i].uni;
+  return idx;
+}
+function updNavSub(){
+  document.getElementById('nav-sub').innerHTML =
+    (devInfo.hostname || '') + '.local &nbsp;&middot;&nbsp; ' + (devInfo.ip || '') +
+    ' &nbsp;&middot;&nbsp; Universe ' + outUniverse(viewOut) +
+    ' &nbsp;&middot;&nbsp; v' + (devInfo.version || '');
+}
+// Tell the device which output's DMX buffer to stream + control, then relabel.
+function setViewOut(idx){
+  viewOut = idx;
+  if (sock && sock.readyState === 1) sock.send(JSON.stringify({type:'viewout', out: idx}));
+  updNavSub();
+}
+function buildOutSelector(){
+  var wrap = document.getElementById('out-sel-wrap');
+  var sel  = document.getElementById('out-sel');
+  if (outputs.length < 2) { wrap.style.display = 'none'; return; }
+  sel.innerHTML = outputs.map(function(o){
+    return '<option value="' + o.idx + '">Output ' + String.fromCharCode(65 + o.idx) +
+           ' · Universe ' + o.uni + '</option>';
+  }).join('');
+  sel.value = viewOut;
+  wrap.style.display = '';
+}
+
 // Device info for the nav subtitle (served statically now; values via JSON)
 fetch('/info.json').then(function(r){ return r.json(); }).then(function(d){
   devInfo = d;
-  document.getElementById('nav-sub').innerHTML =
-    (d.hostname || '') + '.local &nbsp;&middot;&nbsp; ' + (d.ip || '') +
-    ' &nbsp;&middot;&nbsp; Universe ' + d.universe + ' &nbsp;&middot;&nbsp; v' + (d.version || '');
+  var outs = d.outputs || [{en:true, uni:d.universe||0}];
+  outputs = [];
+  for (var i = 0; i < outs.length; i++) if (outs[i].en) outputs.push({idx:i, uni:outs[i].uni});
+  if (outputs.length) viewOut = outputs[0].idx;
+  buildOutSelector();
+  updNavSub();
 }).catch(function(){});
 
 // Sparkline — 60 samples at 0.5 s = 30 s of history
@@ -430,7 +470,8 @@ function connect() {
   sock = new WebSocket('ws://' + location.host + '/ws');
   sock.binaryType = 'arraybuffer';
   var badge = document.getElementById('ws-badge');
-  sock.onopen  = function() { badge.textContent = 'Live';    badge.style.background = '#238636'; };
+  sock.onopen  = function() { badge.textContent = 'Live';    badge.style.background = '#238636';
+                              if (viewOut) sock.send(JSON.stringify({type:'viewout', out: viewOut})); };
   sock.onclose = function() { badge.textContent = 'Offline'; badge.style.background = '#da3633'; setTimeout(connect, 2000); };
   sock.onmessage = function(e) {
     if (typeof e.data === 'string') {
@@ -505,6 +546,7 @@ function updateLog(data) {
     var ageSec  = Math.round((newest - entry.ms) / 1000);
     var timeStr = ageSec === 0 ? 'now' : ageSec + 's ago';
     var proto   = entry.p === 0 ? 'Art-Net' : 'sACN';
+    if (entry.u != null && outputs.length > 1) proto += ' U' + entry.u;
     var chs     = entry.ch.map(function(c) {
       return (labels[c[0]] ? labels[c[0]] : 'ch' + c[0]) + '=' + c[1];
     }).join('&nbsp; ');

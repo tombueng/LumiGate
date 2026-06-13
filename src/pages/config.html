@@ -56,11 +56,7 @@ footer a:hover { color:var(--gh-text); }
             <option value="2">Both (Art-Net + sACN)</option>
           </select>
         </div>
-        <div>
-          <label class="form-label text-secondary small mb-1">Universe</label>
-          <input class="form-control" type="number" name="universe" id="uni-inp" min="0" max="15" value="0">
-          <div class="form-text" id="uni-hint"></div>
-        </div>
+        <div class="form-text">The input protocol applies to the whole device. The universe is set per DMX output below.</div>
       </div>
     </div>
 
@@ -115,68 +111,69 @@ footer a:hover { color:var(--gh-text); }
       </div>
     </div>
 
+    <!-- DMX outputs — up to 2 independent universes -->
     <div class="card mb-3">
-      <div class="card-header">DMX Output / RDM Pins</div>
+      <div class="card-header">DMX Outputs</div>
       <div class="card-body">
-        <div class="form-text mb-3" style="line-height:1.5">
-          The numbers below are <strong>ESP32 GPIO numbers</strong> — the
-          <code>GPIO&nbsp;xx</code> / <code>IO&nbsp;xx</code> / <code>Gxx</code> labels printed on your
-          board next to each pin (the <em>chip</em> pin, <strong>not</strong> the physical header
-          position). Wire each one to the matching pin on your RS485 transceiver. Transceiver boards
-          name their pins inconsistently, so match by <em>function</em> — common aliases are listed
-          per field. (The RS485 side <code>A</code>/<code>B</code> and <code>VCC</code>/<code>GND</code>
-          are wired separately — see below.)
-        </div>
-
-        <div class="mb-3">
-          <label class="form-label text-secondary small mb-1">UART port</label>
-          <select class="form-select" name="dmxport" id="dmx-port">
-            <option value="1" selected>UART1 (recommended)</option>
-            <option value="2">UART2</option>
-          </select>
-          <div class="form-text">Which ESP32 hardware serial peripheral drives the line. UART1 is fine on all boards.</div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label text-secondary small mb-1">TX pin — data out (→ transceiver DI)</label>
-          <input class="form-control" type="number" name="dmxtx" id="dmx-tx" min="-1" max="48" value="17">
-          <div class="form-text">
-            ESP32 GPIO that <em>sends</em> DMX. Wire to the transceiver's <strong>driver input</strong> —
-            labeled <code>DI</code> (or <code>TXD</code>/<code>TX</code>; on some cheap modules,
-            confusingly, <code>RXD</code>).
-          </div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label text-secondary small mb-1">RX pin — data in (← transceiver RO)</label>
-          <input class="form-control" type="number" name="dmxrx" id="dmx-rx" min="-1" max="48" value="16">
-          <div class="form-text">
-            ESP32 GPIO that <em>receives</em> fixture replies (needed for RDM). Wire to the
-            transceiver's <strong>receiver output</strong> — labeled <code>RO</code> (or
-            <code>RXD</code>/<code>RX</code>). If RDM/output won't work, try swapping TX&nbsp;↔&nbsp;RX.
-          </div>
-        </div>
-        <div>
-          <label class="form-label text-secondary small mb-1">RTS / DE-RE pin — direction (→ transceiver EN)</label>
-          <input class="form-control" type="number" name="dmxrts" id="dmx-rts" min="-1" max="48" value="-1">
-          <div class="form-text">
-            ESP32 GPIO that switches the transceiver between transmit and receive. Wire to its
-            <strong>direction</strong> pin — labeled <code>EN</code>, or <code>DE</code>&nbsp;and
-            <code>RE</code> tied together. <strong>Set this to enable RDM</strong> (auto-discovery +
-            remote addressing). <strong>−1 disables RDM</strong> and is required for auto-direction
-            modules (no <code>EN</code>/DE-RE pin, e.g. the Waveshare C). Applied after reboot.
-          </div>
-        </div>
-
-        <div class="form-text mt-3" style="border-top:1px solid #30363d;padding-top:.6rem;line-height:1.5">
-          <strong>Not set here</strong> (wire directly): the transceiver's RS485 side
-          <code>A</code>/<code>B</code> (a.k.a. <code>D+</code>/<code>D−</code>) → XLR
-          <strong>pin&nbsp;3</strong> / <strong>pin&nbsp;2</strong>, GND → XLR pin&nbsp;1; and its
-          <code>VCC</code>→3.3&nbsp;V, <code>GND</code>→GND. Add a 120&nbsp;Ω terminator across A/B at
-          the far end of the DMX chain (required for RDM).
-          <br><strong>Example (ESP32-S3 + MAX3485 "EN" board):</strong>
-          TX=<code>17</code>→DI, RX=<code>16</code>→RO, RTS=<code>4</code>→EN.
+        <div class="form-text" style="line-height:1.5">
+          Each output is an independent DMX universe driven by its own ESP32 UART + RS485 transceiver.
+          Up to <strong>2</strong> outputs are supported (the chip has 3 UARTs and one is the serial
+          console). Pin numbers are <strong>ESP32 GPIO numbers</strong> (the <code>GPIO&nbsp;xx</code> /
+          <code>Gxx</code> label printed on the board), matched to the transceiver pins by function:
+          <strong>TX → DI</strong> (driver input), <strong>RX → RO</strong> (receiver output, needed
+          for RDM), <strong>RTS → EN</strong> (direction / DE-RE; <strong>set it to enable RDM</strong>,
+          leave at <code>−1</code> for auto-direction modules such as the Waveshare C).
+          Each enabled output needs a <em>distinct</em> UART port. RDM runs on the first enabled output
+          that has an RTS pin set. Wire the RS485 <code>A</code>/<code>B</code> → XLR pin&nbsp;3/2,
+          GND → XLR pin&nbsp;1, and add a 120&nbsp;Ω terminator at the end of each chain.
         </div>
       </div>
     </div>
+
+    <div id="outputs-container"></div>
+
+    <!-- Cloned once per output by buildOutputs() -->
+    <template id="out-tpl">
+      <div class="card mb-3 out-card">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span class="out-title">DMX Output</span>
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input out-en" type="checkbox" value="1">
+            <label class="form-check-label small out-en-label">Enabled</label>
+          </div>
+        </div>
+        <div class="card-body out-body">
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <label class="form-label text-secondary small mb-1">Universe (0–15)</label>
+              <input class="form-control out-uni" type="number" min="0" max="15" value="0">
+              <div class="form-text out-uni-hint"></div>
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label text-secondary small mb-1">UART port</label>
+              <select class="form-select out-port">
+                <option value="1">UART1</option>
+                <option value="2">UART2</option>
+              </select>
+              <div class="form-text">Must differ from the other output.</div>
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label text-secondary small mb-1">TX pin → DI</label>
+              <input class="form-control out-tx" type="number" min="-1" max="48" value="-1">
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label text-secondary small mb-1">RX pin → RO</label>
+              <input class="form-control out-rx" type="number" min="-1" max="48" value="-1">
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label text-secondary small mb-1">RTS pin → EN</label>
+              <input class="form-control out-rts" type="number" min="-1" max="48" value="-1">
+            </div>
+          </div>
+          <div class="form-text mt-2 out-rdm-note">Set RTS/EN to a GPIO to enable RDM on this output; leave −1 to disable.</div>
+        </div>
+      </div>
+    </template>
 
     <div class="card mb-3">
       <div class="card-header">Device</div>
@@ -291,12 +288,47 @@ var CURRENT = '';
 
 function $(id){ return document.getElementById(id); }
 
-// Universe hint depends on protocol + universe
-function updUniHint(){
-  var u = +$('uni-inp').value, p = +$('proto-sel').value, parts = [];
+// Per-output universe hint (depends on the global protocol + that output's universe)
+function updCardHint(card){
+  var u = +card.querySelector('.out-uni').value, p = +$('proto-sel').value, parts = [];
   if (p !== 1) parts.push('Art-Net: universe ' + u);
   if (p !== 0) parts.push('sACN: universe ' + (u + 1) + '  →  239.255.0.' + (u + 1));
-  $('uni-hint').textContent = parts.join('  ·  ');
+  card.querySelector('.out-uni-hint').textContent = parts.join('  ·  ');
+}
+function updAllUniHints(){
+  document.querySelectorAll('.out-card').forEach(updCardHint);
+}
+function syncOutBody(card){
+  var on = card.querySelector('.out-en').checked;
+  card.querySelector('.out-body').style.opacity = on ? '' : '.45';
+}
+
+// Clone the template once per output and bind its fields/handlers
+function buildOutputs(outs){
+  var tpl = $('out-tpl'), cont = $('outputs-container');
+  cont.innerHTML = '';
+  for (var i = 0; i < outs.length; i++) wireCard(cont, tpl, i, outs[i] || {});
+}
+function wireCard(cont, tpl, i, o){
+  var node = tpl.content.firstElementChild.cloneNode(true);
+  node.querySelector('.out-title').textContent = 'DMX Output ' + String.fromCharCode(65 + i);
+  var en  = node.querySelector('.out-en');
+  var uni = node.querySelector('.out-uni');
+  var port= node.querySelector('.out-port');
+  var tx  = node.querySelector('.out-tx');
+  var rx  = node.querySelector('.out-rx');
+  var rts = node.querySelector('.out-rts');
+  en.name  = 'o'+i+'_en';   en.id = 'o'+i+'_en';   en.checked = !!o.en;
+  uni.name = 'o'+i+'_uni';  uni.value  = (o.uni  != null ? o.uni  : i);
+  port.name= 'o'+i+'_port'; port.value = (o.port != null ? o.port : i + 1);
+  tx.name  = 'o'+i+'_tx';   tx.value   = (o.tx   != null ? o.tx   : -1);
+  rx.name  = 'o'+i+'_rx';   rx.value   = (o.rx   != null ? o.rx   : -1);
+  rts.name = 'o'+i+'_rts';  rts.value  = (o.rts  != null ? o.rts  : -1);
+  en.addEventListener('change', function(){ syncOutBody(node); });
+  uni.addEventListener('input', function(){ updCardHint(node); });
+  cont.appendChild(node);
+  updCardHint(node);
+  syncOutBody(node);
 }
 function updStatic(){ $('static-fields').style.display = $('static-sw').checked ? '' : 'none'; }
 function updLedPin(){ $('led-pin-row').style.display = $('led-type').value === '0' ? 'none' : ''; }
@@ -307,7 +339,6 @@ fetch('/info.json').then(function(r){ return r.json(); }).then(function(d){
   CURRENT = d.version || '';
   $('cur-ver').textContent = 'v' + CURRENT;
   $('proto-sel').value = d.protocol;
-  $('uni-inp').value   = d.universe;
   $('static-sw').checked = !!d.staticIp;
   $('net-ip').value  = d.sip || '';
   $('net-gw').value  = d.gateway || '';
@@ -315,20 +346,16 @@ fetch('/info.json').then(function(r){ return r.json(); }).then(function(d){
   $('net-dns').value = d.dns || '';
   $('led-type').value = d.ledType;
   $('led-pin').value  = d.ledPin;
-  $('dmx-port').value = d.dmxPort   !== undefined ? d.dmxPort   : 1;
-  $('dmx-tx').value   = d.dmxTxPin  !== undefined ? d.dmxTxPin  : 17;
-  $('dmx-rx').value   = d.dmxRxPin  !== undefined ? d.dmxRxPin  : 16;
-  $('dmx-rts').value  = d.dmxRtsPin !== undefined ? d.dmxRtsPin : -1;
+  buildOutputs(d.outputs || [{en:true, uni:d.universe||0, port:1, tx:17, rx:16, rts:-1}]);
   $('dev-host').value = d.hostname || '';
   $('dev-otapw').value = d.otapw || '';
   $('auto-update-sw').checked = !!d.autoUpdate;
-  updUniHint(); updStatic(); updLedPin(); updHostUrl();
+  updStatic(); updLedPin(); updHostUrl();
   $('save-btn').disabled = false;
   loadVersions();
-}).catch(function(){ $('save-btn').disabled = false; loadVersions(); });
+}).catch(function(){ buildOutputs([{en:true,uni:0,port:1,tx:17,rx:16,rts:-1},{en:false,uni:1,port:2,tx:-1,rx:-1,rts:-1}]); $('save-btn').disabled = false; loadVersions(); });
 
-$('proto-sel').addEventListener('change', updUniHint);
-$('uni-inp').addEventListener('input', updUniHint);
+$('proto-sel').addEventListener('change', updAllUniHints);
 $('static-sw').addEventListener('change', updStatic);
 $('led-type').addEventListener('change', updLedPin);
 $('dev-host').addEventListener('input', updHostUrl);

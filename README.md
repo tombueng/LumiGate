@@ -45,7 +45,8 @@ A guided tour of every control — manual channel control, labels, sparkline his
 | **mDNS** | Reachable as `dmx-gateway.local` (hostname configurable) |
 | **REST API** | `GET /dmx.json`, `/senders.json`, `/log.json`, `/version.json`, `/labels.json` |
 | **Status LED** | Plain GPIO or WS2812 RGB NeoPixel — color codes WiFi/idle/DMX active state |
-| **Configurable DMX pins** | TX / RX / RTS GPIO and UART port (0/1/2) set at runtime via web UI — no recompile |
+| **Up to 2 DMX outputs** | Two independent universes, each its own UART + RS485 transceiver (same universe on both = splitter) |
+| **Configurable DMX pins** | Per output: universe, UART port, TX / RX / RTS GPIO — set at runtime via web UI, no recompile |
 | **NVS persistence** | Universe, protocol, IP config, labels, hostname, OTA password, LED/DMX pin config survive reboots |
 | **Config reset** | Hold BOOT button 3 s on startup, or via `/reset` page |
 | **Ethernet support** | WT32-ETH01: wired LAN via LAN8720, no WiFi required, DHCP |
@@ -544,16 +545,32 @@ Default GPIO: `2` (ESP32 DevKit on-board LED). ESP32-S3 DevKitC-1 uses GPIO `48`
 
 ---
 
-## DMX Output Pins
+## DMX Outputs
 
-All DMX hardware settings are configurable at runtime under **Settings → DMX Output Pins** — no recompile needed.
+LumiGate drives up to **2 independent DMX outputs** — each its own universe, UART port and
+RS485 transceiver — configurable at runtime under **Settings → DMX Outputs** (no recompile).
+The 2-output ceiling is a hardware limit: the ESP32 / ESP32-S3 expose 3 UARTs and UART0 is the
+serial console, leaving UART1 + UART2. **Output B ships disabled**, so single-universe setups are
+unchanged, and devices updated from older firmware keep their existing output as Output A.
 
-| Setting | Default | Description |
+Per output:
+
+| Setting | Default (Output A / B) | Description |
 |---|---|---|
-| UART port | `1` | Which ESP32 UART peripheral to use (0 / 1 / 2). UART1 is recommended; UART0 conflicts with Serial. |
-| TX pin | `17` (GPIO17) | ESP32 GPIO that drives the RS485 module's RXD input |
-| RX pin | `16` (GPIO16) | ESP32 GPIO connected to the RS485 module's TXD output |
-| RTS / DE pin | `−1` (disabled) | RS485 direction-control pin. Set to −1 for auto-direction modules (Waveshare C). Required for RDM. |
+| Enabled | A on / B off | Whether this output drives a DMX line |
+| Universe | `0` / `1` | Art-Net universe (sACN universe = this + 1). Range 0–15 |
+| UART port | `1` / `2` | Which ESP32 UART drives the line. Each enabled output needs a **distinct** port |
+| TX pin | `17` (GPIO17) | ESP32 GPIO that drives the RS485 module's DI (data-in) |
+| RX pin | `16` (GPIO16) | ESP32 GPIO connected to the RS485 module's RO (data-out); needed for RDM |
+| RTS / DE pin | `−1` (disabled) | RS485 direction-control pin. −1 for auto-direction modules (Waveshare C). Required for RDM. |
+
+Setting **both outputs to the same universe** turns LumiGate into a 1-in / 2-out DMX splitter.
+**RDM** runs on the first enabled output with an RTS pin set (one output at a time). For
+multi-universe input, **Art-Net is recommended** (single UDP socket, no IGMP); sACN works too
+(one multicast group joined per universe).
+
+> **WT32-ETH01:** the Ethernet PHY consumes most GPIOs, so a second output is best run
+> output-only (TX, no RX/RDM).
 
 **Board defaults** (applied on first boot; overrideable in the web UI):
 
@@ -580,8 +597,7 @@ All DMX hardware settings are configurable at runtime under **Settings → DMX O
 | Hostname | `dmx-gateway` | Web `/config` |
 | OTA Password | `dmxota` | Web `/config` |
 | LED type / GPIO pin | board default | Web `/config` (Status LED) |
-| UART port | `1` | Web `/config` (DMX Output Pins) |
-| DMX TX / RX / RTS pins | board default (TX=17, RX=16, RTS=−1) | Web `/config` (DMX Output Pins) |
+| Per-output: enabled / universe / UART port / TX / RX / RTS | A on (uni 0, UART1, TX=17, RX=16, RTS=−1); B off | Web `/config` (DMX Outputs) |
 | WiFi credentials | — | Config portal or `/reset` |
 
 ---
@@ -594,7 +610,7 @@ All DMX hardware settings are configurable at runtime under **Settings → DMX O
 - [ ] MQTT integration (Home Assistant / Node-RED)
 - [x] Channel labels / fixture naming
 - [ ] RDM support (requires module with controllable DE/RE pin, e.g. SP3485)
-- [ ] Multi-universe (multiple RS485 ports)
+- [x] Multi-universe — up to 2 outputs, each its own universe + RS485 port (UART-limited)
 
 ---
 
