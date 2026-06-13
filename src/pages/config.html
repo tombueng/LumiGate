@@ -111,6 +111,87 @@ footer a:hover { color:var(--gh-text); }
       </div>
     </div>
 
+    <!-- Display (issue #5) -->
+    <div class="card mb-3">
+      <div class="card-header">Display</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label text-secondary small mb-1">Display type</label>
+          <select class="form-select" name="disptype" id="disp-type">
+            <option value="0">Disabled</option>
+            <option value="1">SSD1306 128&times;64 OLED (I²C)</option>
+            <option value="2">SSD1306 128&times;32 OLED (I²C)</option>
+            <option value="3">SH1106 128&times;64 OLED (I²C)</option>
+            <option value="4">SSD1351 128&times;128 colour OLED (SPI)</option>
+          </select>
+          <div class="form-text">
+            Shows IP, universe, FPS, source count and link status; auto-switches to a warning
+            banner on a source conflict, identify, or manual override. I²C address is
+            auto-detected (0x3C / 0x3D); the colour panel mirrors the status-LED colours.
+          </div>
+        </div>
+
+        <div id="disp-i2c">
+          <div class="row g-2">
+            <div class="col">
+              <label class="form-label text-secondary small mb-1">SDA pin</label>
+              <input class="form-control" type="number" name="dispsda" id="disp-sda" min="-1" max="48" value="21">
+            </div>
+            <div class="col">
+              <label class="form-label text-secondary small mb-1">SCL pin</label>
+              <input class="form-control" type="number" name="dispscl" id="disp-scl" min="-1" max="48" value="22">
+            </div>
+          </div>
+          <div class="form-text mt-2">
+            ESP32 GPIO numbers. Avoid strapping pins such as <code>GPIO12</code>. On WT32-ETH01
+            use <code>14</code>&nbsp;/&nbsp;<code>15</code> (most pins are taken by Ethernet).
+          </div>
+        </div>
+
+        <div id="disp-spi" style="display:none">
+          <div class="row g-2">
+            <div class="col">
+              <label class="form-label text-secondary small mb-1">CS</label>
+              <input class="form-control" type="number" name="dispcs" id="disp-cs" min="-1" max="48" value="-1">
+            </div>
+            <div class="col">
+              <label class="form-label text-secondary small mb-1">DC</label>
+              <input class="form-control" type="number" name="dispdc" id="disp-dc" min="-1" max="48" value="-1">
+            </div>
+            <div class="col">
+              <label class="form-label text-secondary small mb-1">RST</label>
+              <input class="form-control" type="number" name="disprst" id="disp-rst" min="-1" max="48" value="-1">
+            </div>
+          </div>
+          <div class="row g-2 mt-1">
+            <div class="col">
+              <label class="form-label text-secondary small mb-1">SCK / CLK</label>
+              <input class="form-control" type="number" name="dispsck" id="disp-sck" min="-1" max="48" value="-1">
+            </div>
+            <div class="col">
+              <label class="form-label text-secondary small mb-1">MOSI / DIN</label>
+              <input class="form-control" type="number" name="dispmosi" id="disp-mosi" min="-1" max="48" value="-1">
+            </div>
+          </div>
+          <div class="form-text mt-2">
+            Hardware-SPI pins for the colour OLED. SPI panels need ~5 pins, so they only fit the
+            non-Ethernet boards (ESP32 / ESP32-S3), not WT32-ETH01 or the PoE carrier.
+          </div>
+        </div>
+
+        <div id="disp-common" style="display:none">
+          <div class="mt-3">
+            <label class="form-label text-secondary small mb-1">Orientation</label>
+            <select class="form-select" name="disprot" id="disp-rot">
+              <option value="0">Normal</option>
+              <option value="1">Flipped 180&deg;</option>
+            </select>
+          </div>
+          <div class="form-text mt-2">Applied after reboot.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- DMX outputs — up to 2 independent universes -->
     <div class="card mb-3">
       <div class="card-header">DMX Outputs</div>
@@ -332,6 +413,12 @@ function wireCard(cont, tpl, i, o){
 }
 function updStatic(){ $('static-fields').style.display = $('static-sw').checked ? '' : 'none'; }
 function updLedPin(){ $('led-pin-row').style.display = $('led-type').value === '0' ? 'none' : ''; }
+function updDispPins(){
+  var t = $('disp-type').value;
+  $('disp-common').style.display = t === '0' ? 'none' : '';
+  $('disp-i2c').style.display = (t === '1' || t === '2' || t === '3') ? '' : 'none';
+  $('disp-spi').style.display = (t === '4') ? '' : 'none';
+}
 function updHostUrl(){ $('dev-host-url').textContent = 'http://' + $('dev-host').value + '.local'; }
 
 // Populate every field from /info.json (page itself is served statically)
@@ -347,10 +434,19 @@ fetch('/info.json').then(function(r){ return r.json(); }).then(function(d){
   $('led-type').value = d.ledType;
   $('led-pin').value  = d.ledPin;
   buildOutputs(d.outputs || [{en:true, uni:d.universe||0, port:1, tx:17, rx:16, rts:-1}]);
+  $('disp-type').value = d.dispType !== undefined ? d.dispType : 0;
+  $('disp-sda').value  = d.dispSda  !== undefined ? d.dispSda  : 21;
+  $('disp-scl').value  = d.dispScl  !== undefined ? d.dispScl  : 22;
+  $('disp-rot').value  = d.dispRot  !== undefined ? d.dispRot  : 0;
+  $('disp-cs').value   = d.dispCs   !== undefined ? d.dispCs   : -1;
+  $('disp-dc').value   = d.dispDc   !== undefined ? d.dispDc   : -1;
+  $('disp-rst').value  = d.dispRst  !== undefined ? d.dispRst  : -1;
+  $('disp-sck').value  = d.dispSck  !== undefined ? d.dispSck  : -1;
+  $('disp-mosi').value = d.dispMosi !== undefined ? d.dispMosi : -1;
   $('dev-host').value = d.hostname || '';
   $('dev-otapw').value = d.otapw || '';
   $('auto-update-sw').checked = !!d.autoUpdate;
-  updStatic(); updLedPin(); updHostUrl();
+  updStatic(); updLedPin(); updDispPins(); updHostUrl();
   $('save-btn').disabled = false;
   loadVersions();
 }).catch(function(){ buildOutputs([{en:true,uni:0,port:1,tx:17,rx:16,rts:-1},{en:false,uni:1,port:2,tx:-1,rx:-1,rts:-1}]); $('save-btn').disabled = false; loadVersions(); });
@@ -373,6 +469,7 @@ document.querySelector('form[action="/config"]').addEventListener('submit', func
 $('proto-sel').addEventListener('change', updAllUniHints);
 $('static-sw').addEventListener('change', updStatic);
 $('led-type').addEventListener('change', updLedPin);
+$('disp-type').addEventListener('change', updDispPins);
 $('dev-host').addEventListener('input', updHostUrl);
 
 // Auto-update toggle (persisted on device, no reboot)

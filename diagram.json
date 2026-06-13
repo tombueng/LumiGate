@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "author": "LumiGate",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-s3-devkitc-1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": { "flashSize": "8" }
+    },
+    {
+      "type": "wokwi-logic-analyzer",
+      "id": "la1",
+      "top": -120,
+      "left": 200,
+      "attrs": {}
+    },
+    {
+      "type": "board-ssd1306",
+      "id": "oled",
+      "top": 110,
+      "left": 200,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    [ "esp:17", "la1:D0", "green", [ "v0" ] ],
+    [ "esp:GND.1", "la1:GND", "black", [ "v0" ] ],
+    [ "$serialMonitor:RX", "esp:TX", "", [] ],
+    [ "$serialMonitor:TX", "esp:RX", "", [] ],
+    [ "oled:SDA", "esp:8", "blue", [ "h0" ] ],
+    [ "oled:SCL", "esp:9", "yellow", [ "h0" ] ],
+    [ "oled:VCC", "esp:3V3", "red", [ "h0" ] ],
+    [ "oled:GND", "esp:GND.2", "black", [ "h0" ] ]
+  ]
+}

@@ -10,6 +10,12 @@
 #include <soc/soc.h>
 #include <soc/rtc_cntl_reg.h>
 #include <Adafruit_NeoPixel.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_SH110X.h>
+#include <Adafruit_SSD1351.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <esp_wifi.h>   // for esp_wifi_get/set_config (BSSID lock clearing)
@@ -83,6 +89,20 @@ static constexpr uint32_t   HOLD_MS     = 3000;
 #endif
 #ifndef DEF_LED_TYPE
 #define DEF_LED_TYPE 1   // 0=off, 1=plain GPIO, 2=WS2812
+#endif
+
+// Optional I2C status display (off by default; enable + pin it from /config)
+#ifndef DEF_DISP_TYPE
+#define DEF_DISP_TYPE 0  // 0=off, 1=SSD1306 128x64, 2=SSD1306 128x32, 3=SH1106 128x64
+#endif
+#ifndef DEF_DISP_SDA
+#define DEF_DISP_SDA 21
+#endif
+#ifndef DEF_DISP_SCL
+#define DEF_DISP_SCL 22
+#endif
+#ifndef DEF_DISP_ROT
+#define DEF_DISP_ROT 0   // 0=normal, 1=flipped 180 deg
 #endif
 
 // ---------------------------------------------------------------------------
@@ -203,6 +223,15 @@ struct Config {
     int    ledPin;
     int    ledType;
     DmxOutput outputs[MAX_OUTPUTS];
+    int    dispType;       // 0=off, 1/2=SSD1306 128x64/32, 3=SH1106 128x64, 4=SSD1351 colour
+    int    dispSda;        // I2C pins (dispType 1-3); -1 = unset
+    int    dispScl;
+    int    dispRot;        // 0=normal, 1=flipped 180 deg
+    int    dispCs;         // SPI pins for the colour panel (dispType 4); -1 = unset
+    int    dispDc;
+    int    dispRst;
+    int    dispSck;
+    int    dispMosi;
     bool   staticIp;       // false = DHCP
     String ip;             // dotted-quad strings; empty when unused
     String gateway;
@@ -264,6 +293,15 @@ static void loadConfig() {
     cfg.outputs[1].rxPin    = constrain(prefs.getInt(okey(1,"rx").c_str(),  -1), -1, 48);
     cfg.outputs[1].rtsPin   = constrain(prefs.getInt(okey(1,"rts").c_str(), -1), -1, 48);
 
+    cfg.dispType    = constrain(prefs.getInt("disptype", DEF_DISP_TYPE),  0, 4);
+    cfg.dispSda     = constrain(prefs.getInt("dispsda",  DEF_DISP_SDA),  -1, 48);
+    cfg.dispScl     = constrain(prefs.getInt("dispscl",  DEF_DISP_SCL),  -1, 48);
+    cfg.dispRot     = constrain(prefs.getInt("disprot",  DEF_DISP_ROT),   0, 1);
+    cfg.dispCs      = constrain(prefs.getInt("dispcs",   -1), -1, 48);
+    cfg.dispDc      = constrain(prefs.getInt("dispdc",   -1), -1, 48);
+    cfg.dispRst     = constrain(prefs.getInt("disprst",  -1), -1, 48);
+    cfg.dispSck     = constrain(prefs.getInt("dispsck",  -1), -1, 48);
+    cfg.dispMosi    = constrain(prefs.getInt("dispmosi", -1), -1, 48);
     cfg.staticIp    = prefs.getBool("staticip", false);
     cfg.ip          = prefs.getString("ip",      "");
     cfg.gateway     = prefs.getString("gateway", "");
@@ -290,6 +328,15 @@ static void saveConfig() {
         prefs.putInt(okey(i,"rx").c_str(),    cfg.outputs[i].rxPin);
         prefs.putInt(okey(i,"rts").c_str(),   cfg.outputs[i].rtsPin);
     }
+    prefs.putInt("disptype",    cfg.dispType);
+    prefs.putInt("dispsda",     cfg.dispSda);
+    prefs.putInt("dispscl",     cfg.dispScl);
+    prefs.putInt("disprot",     cfg.dispRot);
+    prefs.putInt("dispcs",      cfg.dispCs);
+    prefs.putInt("dispdc",      cfg.dispDc);
+    prefs.putInt("disprst",     cfg.dispRst);
+    prefs.putInt("dispsck",     cfg.dispSck);
+    prefs.putInt("dispmosi",    cfg.dispMosi);
     prefs.putBool("staticip",   cfg.staticIp);
     prefs.putString("ip",       cfg.ip);
     prefs.putString("gateway",  cfg.gateway);
@@ -339,6 +386,86 @@ static void setLedColor(uint32_t neoColor, bool gpioOn) {
     }
 }
 static void setLed(bool on) { setLedColor(on ? NEO_GREEN : NEO_OFF, on); }
+
+// ---------------------------------------------------------------------------
+// Optional status display (Adafruit_GFX family)
+//   Mono I2C : SSD1306 128x64/128x32 + SH1106 128x64   — dispType 1/2/3
+//   Colour SPI: SSD1351 128x128 RGB                    — dispType 4
+// One Adafruit_GFX* drives them all; the renderer (Phase 3) is type-agnostic.
+// ---------------------------------------------------------------------------
+static Adafruit_GFX* gfx       = nullptr;   // null until initDisplay() succeeds
+static bool          dispReady = false;
+
+// Foreground "on" colour. Mono drivers want the 1-bit WHITE constant (==1);
+// the colour panel wants RGB565 white. Passing 0xFFFF to a mono driver draws
+// nothing (its drawPixel only matches 0/1/2), so the two must differ.
+static inline uint16_t dispFg() { return cfg.dispType == 4 ? 0xFFFF : 1; }
+
+// Push the RAM buffer to the panel. Mono drivers buffer and need display();
+// the SSD1351 draws straight over SPI, so there is nothing to flush.
+static void dispFlush() {
+    if (!gfx) return;
+    if (cfg.dispType == 3)      static_cast<Adafruit_SH1106G*>(gfx)->display();
+    else if (cfg.dispType != 4) static_cast<Adafruit_SSD1306*>(gfx)->display();
+}
+
+static void dispSplash() {
+    if (!gfx) return;
+    bool big = gfx->height() >= 64;
+    gfx->fillScreen(0);
+    gfx->setTextColor(dispFg());
+    gfx->setTextSize(big ? 2 : 1);
+    gfx->setCursor(0, 0);
+    gfx->print("LumiGate");
+    gfx->setTextSize(1);
+    gfx->setCursor(0, big ? 22 : 12);
+    gfx->print('v'); gfx->print(FIRMWARE_VERSION);
+    gfx->setCursor(0, big ? 36 : 22);
+    gfx->print("booting...");
+    dispFlush();
+}
+
+// Build the driver that matches cfg.dispType, probe/begin it, show the splash.
+// No-op when disabled; on failure logs and leaves gfx==nullptr (never hangs).
+static void initDisplay() {
+    if (cfg.dispType <= 0) return;
+
+    if (cfg.dispType == 4) {
+        // Colour SSD1351 over hardware SPI.
+        if (cfg.dispSck >= 0 && cfg.dispMosi >= 0)
+            SPI.begin(cfg.dispSck, -1, cfg.dispMosi, cfg.dispCs);
+        Adafruit_SSD1351* d = new Adafruit_SSD1351(128, 128, &SPI,
+                                  cfg.dispCs, cfg.dispDc, cfg.dispRst);
+        d->begin();
+        gfx = d;
+    } else {
+        // Mono OLED over I2C — probe 0x3C then 0x3D.
+        if (cfg.dispSda >= 0 && cfg.dispScl >= 0) Wire.begin(cfg.dispSda, cfg.dispScl);
+        Wire.setClock(400000);
+        uint8_t addr = 0x3C;
+        Wire.beginTransmission(0x3C);
+        if (Wire.endTransmission() != 0) {
+            Wire.beginTransmission(0x3D);
+            if (Wire.endTransmission() == 0) addr = 0x3D;
+        }
+        if (cfg.dispType == 3) {
+            Adafruit_SH1106G* d = new Adafruit_SH1106G(128, 64, &Wire, -1);
+            if (!d->begin(addr, true)) { delete d; Serial.println("[DISP] SH1106 init failed"); return; }
+            gfx = d;
+        } else {
+            int h = (cfg.dispType == 2) ? 32 : 64;
+            Adafruit_SSD1306* d = new Adafruit_SSD1306(128, h, &Wire, -1);
+            if (!d->begin(SSD1306_SWITCHCAPVCC, addr)) { delete d; Serial.println("[DISP] SSD1306 init failed"); return; }
+            gfx = d;
+        }
+        Serial.printf("[DISP] I2C addr 0x%02X\n", addr);
+    }
+
+    gfx->setRotation(cfg.dispRot ? 2 : 0);
+    dispReady = true;
+    Serial.printf("[DISP] type=%d %dx%d ready\n", cfg.dispType, gfx->width(), gfx->height());
+    dispSplash();
+}
 
 // ---------------------------------------------------------------------------
 // General helpers
@@ -1013,6 +1140,15 @@ static void handleInfoJson(AsyncWebServerRequest* req) {
         j += "}";
     }
     j += "],";
+    j += "\"dispType\":";   j += cfg.dispType;           j += ",";
+    j += "\"dispSda\":";    j += cfg.dispSda;            j += ",";
+    j += "\"dispScl\":";    j += cfg.dispScl;            j += ",";
+    j += "\"dispRot\":";    j += cfg.dispRot;            j += ",";
+    j += "\"dispCs\":";     j += cfg.dispCs;             j += ",";
+    j += "\"dispDc\":";     j += cfg.dispDc;             j += ",";
+    j += "\"dispRst\":";    j += cfg.dispRst;            j += ",";
+    j += "\"dispSck\":";    j += cfg.dispSck;            j += ",";
+    j += "\"dispMosi\":";   j += cfg.dispMosi;           j += ",";
     j += "\"staticIp\":";   j += cfg.staticIp ? "true" : "false"; j += ",";
     j += "\"sip\":\"";      j += cfg.ip;                 j += "\",";
     j += "\"gateway\":\"";  j += cfg.gateway;            j += "\",";
@@ -1116,6 +1252,15 @@ static void handleConfigPost(AsyncWebServerRequest* req) {
         if (argStr(req, okey(i,"rx").c_str(),   s)) o.rxPin    = constrain(s.toInt(), -1, 48);
         if (argStr(req, okey(i,"rts").c_str(),  s)) o.rtsPin   = constrain(s.toInt(), -1, 48);
     }
+    if (argStr(req, "disptype", s)) cfg.dispType  = constrain(s.toInt(), 0, 4);
+    if (argStr(req, "dispsda", s))  cfg.dispSda   = constrain(s.toInt(), -1, 48);
+    if (argStr(req, "dispscl", s))  cfg.dispScl   = constrain(s.toInt(), -1, 48);
+    if (argStr(req, "disprot", s))  cfg.dispRot   = constrain(s.toInt(), 0, 1);
+    if (argStr(req, "dispcs", s))   cfg.dispCs    = constrain(s.toInt(), -1, 48);
+    if (argStr(req, "dispdc", s))   cfg.dispDc    = constrain(s.toInt(), -1, 48);
+    if (argStr(req, "disprst", s))  cfg.dispRst   = constrain(s.toInt(), -1, 48);
+    if (argStr(req, "dispsck", s))  cfg.dispSck   = constrain(s.toInt(), -1, 48);
+    if (argStr(req, "dispmosi", s)) cfg.dispMosi  = constrain(s.toInt(), -1, 48);
     cfg.staticIp = req->hasParam("staticip", true) || req->hasParam("staticip");
     if (argStr(req, "ip", s))      cfg.ip      = s;
     if (argStr(req, "gateway", s)) cfg.gateway = s;
@@ -1503,6 +1648,156 @@ static void ledTask(void*) {
 }
 
 // ---------------------------------------------------------------------------
+// Status display rendering — own task, reads state only (like ledTask).
+// Resting status screen + auto-rotate alert banners (conflict/identify/manual).
+// ---------------------------------------------------------------------------
+// RGB565 palette — the same status language as the WS2812 LED. col() collapses
+// any non-black colour to "on" (==1) for the 1-bit mono panels.
+static constexpr uint16_t C_WHITE = 0xFFFF, C_GREEN = 0x07E0, C_AMBER = 0xFD20,
+                          C_RED   = 0xF800, C_BLUE  = 0x349F, C_GREY  = 0x8410;
+static inline uint16_t col(uint16_t rgb) { return cfg.dispType == 4 ? rgb : (rgb ? 1 : 0); }
+
+static const char* dispProto() {
+    return cfg.protocol == 0 ? "Art-Net" : cfg.protocol == 1 ? "sACN" : "Both";
+}
+
+// Print s at text size ts, horizontally centred, top at y (built-in 6x8 font).
+static void dispCenter(const char* s, int ts, int y) {
+    int w = (int)strlen(s) * 6 * ts;
+    int x = (gfx->width() - w) / 2; if (x < 0) x = 0;
+    gfx->setTextSize(ts);
+    gfx->setCursor(x, y);
+    gfx->print(s);
+}
+
+static void dispDrawStatus() {
+    const int W = gfx->width(), H = gfx->height();
+    const bool live = (millis() - lastDmxMs) < 1500;
+    const bool up   = netConnected();
+    const uint16_t accent = !up ? C_RED : (live ? C_GREEN : C_AMBER);
+    char b[40];
+
+    gfx->fillScreen(0);
+    gfx->setTextSize(1);
+
+    if (H <= 32) {                       // compact 3-row strip (128x32)
+        gfx->setTextColor(col(C_WHITE));
+        gfx->setCursor(0, 0);  gfx->print(up ? netLocalIP().toString() : String("no link"));
+        gfx->setTextColor(col(accent));
+        gfx->setCursor(W - 24, 0); gfx->print(live ? "LIVE" : "idle");
+        gfx->setTextColor(col(C_WHITE));
+        gfx->setCursor(0, 11); gfx->print('U'); gfx->print(cfg.universe);
+        gfx->print(' '); gfx->print(dispProto());
+        snprintf(b, sizeof(b), "%.1ffps Src%u", fps, activeSenderCount());
+        gfx->setCursor(0, 22); gfx->print(b);
+        return;
+    }
+
+    if (H >= 96) {                       // tall colour panel (SSD1351 128x128)
+        char b[24];
+        gfx->setTextSize(2); gfx->setTextColor(col(accent));
+        gfx->setCursor(0, 0);  gfx->print("LumiGate");
+        gfx->setTextSize(1); gfx->setTextColor(col(C_GREY));
+        gfx->setCursor(0, 18); gfx->print('v'); gfx->print(FIRMWARE_VERSION);
+        gfx->setTextColor(col(C_WHITE));
+        gfx->setCursor(0, 30); gfx->print(up ? netLocalIP().toString() : String("no link"));
+        gfx->drawFastHLine(0, 42, W, col(C_GREY));
+        gfx->setTextColor(col(C_GREY)); gfx->setCursor(0, 48); gfx->print("FPS");
+        snprintf(b, sizeof(b), "%.1f", fps);
+        gfx->setTextSize(3); gfx->setTextColor(col(accent));
+        gfx->setCursor(0, 58); gfx->print(b);
+        gfx->setTextSize(1); gfx->setTextColor(col(C_WHITE));
+        gfx->setCursor(0, 88);  gfx->print("Uni "); gfx->print(cfg.universe);
+        gfx->print("  "); gfx->print(dispProto());
+        gfx->setCursor(0, 100); gfx->print("Src "); gfx->print(activeSenderCount());
+        gfx->setCursor(0, 114);
+#ifdef USE_ETHERNET
+        gfx->print(up ? "ETH up" : "ETH down");
+#else
+        if (up) { snprintf(b, sizeof(b), "WiFi %ddBm", netRSSI()); gfx->print(b); }
+#endif
+        gfx->setTextColor(col(accent));
+        const char* st2 = live ? "LIVE" : "idle";
+        gfx->setCursor(W - (int)strlen(st2) * 6, 114); gfx->print(st2);
+        return;
+    }
+
+    // Full layout (128x64) — rows spread to fill the height; size-1 fits 128 wide.
+    int rp = (H - 8) / 5; if (rp > 20) rp = 20;
+    int y = 0;
+    gfx->setTextColor(col(accent));      // title lands in the yellow band on split panels
+    gfx->setCursor(0, y); gfx->print("LumiGate");
+    { const char* v = FIRMWARE_VERSION; int vw = (int)strlen(v) * 6;
+      gfx->setTextColor(col(C_GREY)); gfx->setCursor(W - vw, y); gfx->print(v); }
+    y += rp;
+    gfx->setTextColor(col(C_WHITE));
+    gfx->setCursor(0, y); gfx->print(up ? netLocalIP().toString() : String("no link"));
+    y += rp;
+    gfx->setCursor(0, y); gfx->print('U'); gfx->print(cfg.universe);
+    gfx->print("  "); gfx->print(dispProto());
+    y += rp;
+    snprintf(b, sizeof(b), "FPS %.1f   Src %u", fps, activeSenderCount());
+    gfx->setCursor(0, y); gfx->print(b);
+    y += rp;
+#ifdef USE_ETHERNET
+    gfx->setCursor(0, y); gfx->print(up ? "ETH up" : "ETH down");
+#else
+    if (up) { snprintf(b, sizeof(b), "WiFi %ddBm", netRSSI()); gfx->setCursor(0, y); gfx->print(b); }
+#endif
+    gfx->setTextColor(col(accent));
+    const char* st = live ? "LIVE" : "idle";
+    gfx->setCursor(W - (int)strlen(st) * 6, y); gfx->print(st);
+}
+
+static void dispDrawBanner(const char* l1, const char* l2, uint16_t accent) {
+    const int H = gfx->height();
+    const int ts = (H >= 64) ? 2 : 1;
+    gfx->fillScreen(0);
+    gfx->setTextColor(col(accent));
+    dispCenter(l1, ts, H >= 64 ? H / 2 - 8 * ts : 0);
+    gfx->setTextColor(col(C_WHITE));
+    dispCenter(l2, 1, H >= 64 ? H / 2 + 4 : 16);
+}
+
+// Priority: 1=conflict, 2=identify, 3=manual, 0=status.
+static uint8_t dispPickScreen() {
+    if (hasConflict()) return 1;
+    if (identifyCh)    return 2;
+    if (manualMode)    return 3;
+    return 0;
+}
+
+static void dispRender(uint8_t screen) {
+    char b[16];
+    switch (screen) {
+        case 1: dispDrawBanner("CONFLICT", "2+ sources", C_RED); break;
+        case 2: snprintf(b, sizeof(b), "ch %u", identifyCh);
+                dispDrawBanner("IDENTIFY", b, C_AMBER); break;
+        case 3: dispDrawBanner("MANUAL", "override", C_BLUE); break;
+        default: dispDrawStatus(); break;
+    }
+    dispFlush();
+}
+
+static void displayTask(void*) {
+    const TickType_t period = pdMS_TO_TICKS(250);
+    uint8_t  lastScreen  = 255;
+    uint32_t screenSince = 0;
+    for (;;) {
+        if (dispReady && gfx) {
+            uint32_t now  = millis();
+            uint8_t  want = dispPickScreen();
+            // Dwell: hold a banner >=1.5 s before falling back, so a blip stays readable.
+            if (want == 0 && lastScreen != 0 && lastScreen != 255 && now - screenSince < 1500)
+                want = lastScreen;
+            if (want != lastScreen) { lastScreen = want; screenSince = now; }
+            dispRender(want);
+        }
+        vTaskDelay(period);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // setup()
 // ---------------------------------------------------------------------------
 void setup() {
@@ -1514,6 +1809,7 @@ void setup() {
     loadConfig();
     initLed();
     setLedColor(NEO_WHITE, true);   // booting
+    initDisplay();                  // optional status panel — shows boot splash
     pinMode(BOOT_PIN, INPUT_PULLUP);
 
 #ifdef USE_ETHERNET
@@ -1550,11 +1846,26 @@ void setup() {
     WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
     WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
     setLedColor(NEO_BLUE, true);   // connecting to stored WiFi
+#ifdef SIM_WIFI
+    // Simulation only (Wokwi): the WiFiManager config portal cannot be reached
+    // from the host, so join Wokwi's open virtual AP directly. Never compiled
+    // into a real build — guarded by the SIM_WIFI flag set in [env:wokwi].
+    (void)forcePortal;
+    Serial.print("[SIM] joining Wokwi-GUEST");
+    WiFi.begin("Wokwi-GUEST", "");
+    { uint32_t t = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - t < 20000) {
+          setLedColor((millis() % 600) < 300 ? NEO_BLUE : NEO_OFF, (millis() % 600) < 300);
+          delay(200); Serial.print(".");
+      } }
+    Serial.println();
+#else
     startWiFiManager(forcePortal);
     // The ESP32's auto-connect reliably sticks to whichever AP it used before,
     // even a distant one on a mesh. Explicitly scan and hop to the strongest
     // AP for our SSID on every boot (also logs all APs for diagnostics).
     connectStrongestAP();
+#endif  // SIM_WIFI
     // Disable WiFi power save: with modem-sleep the station misses buffered
     // multicast (sACN) and IGMP queries, causing periodic ~0.3-0.5s reception
     // gaps. WIFI_PS_NONE keeps the radio awake for reliable multicast.
@@ -1611,9 +1922,44 @@ void setup() {
     lastFrameMs = millis();
     // LED on its own low-priority task so web traffic can't freeze it.
     xTaskCreate(ledTask, "led", 2048, nullptr, 1, nullptr);
+    if (dispReady) xTaskCreate(displayTask, "disp", 4096, nullptr, 1, nullptr);
     xTaskCreate(versionCheckTask, "ver_chk", 12288, nullptr, 1, nullptr);
     Serial.println("[BOOT] ready.");
 }
+
+#ifdef SIM_ARTNET
+// ---------------------------------------------------------------------------
+// Simulation only (Wokwi): synthesize a moving Art-Net test pattern so the
+// whole input pipeline — sender tracking, change log, fps/jitter, WS push and
+// the 40 Hz DMX output — runs without an external console. A bright "head"
+// sweeps across the universe with a soft trail; channel 1 breathes on a sine.
+// Feeds the exact same onDmxFrame() path a real Art-Net packet would. Guarded
+// by SIM_ARTNET (set in [env:wokwi]); never compiled into a real build.
+// ---------------------------------------------------------------------------
+static void simArtnetTick() {
+    static uint32_t last = 0;
+    uint32_t now = millis();
+    if (now - last < 25) return;            // ~40 Hz, like a lighting console
+    last = now;
+
+    static uint8_t frame[512];
+    memset(frame, 0, sizeof(frame));
+    uint16_t head = (now / 40) % 512;       // sweeps ~25 channels/sec
+    frame[head] = 255;
+    if (head >= 1)        frame[head - 1] = 120;   // trailing edge
+    if (head + 1 < 512)   frame[head + 1] = 120;   // leading edge
+    frame[0] = (uint8_t)(127.0f + 127.0f * sinf(now / 500.0f));  // ch1 breathe
+
+    onDmxFrame(frame, 512, (uint32_t)IPAddress(10, 13, 37, 1), 0);
+
+    static uint32_t lastLog = 0;
+    if (now - lastLog >= 1000) {            // 1 Hz proof-of-life on the console
+        lastLog = now;
+        Serial.printf("[SIM] artnet pattern: head=ch%u ch1=%u fps=%.1f\n",
+                      head + 1, frame[0], fps);
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // loop()
@@ -1624,6 +1970,9 @@ void loop() {
     if (cfg.protocol != 1) artnet.read();
     if (cfg.protocol != 0) readSacn();
     ArduinoOTA.handle();
+#ifdef SIM_ARTNET
+    simArtnetTick();
+#endif
 
     uint32_t now = millis();
 
