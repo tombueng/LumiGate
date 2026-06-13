@@ -393,20 +393,29 @@ static void setLed(bool on) { setLedColor(on ? NEO_GREEN : NEO_OFF, on); }
 //   Colour SPI: SSD1351 128x128 RGB                    — dispType 4
 // One Adafruit_GFX* drives them all; the renderer (Phase 3) is type-agnostic.
 // ---------------------------------------------------------------------------
-static Adafruit_GFX* gfx       = nullptr;   // null until initDisplay() succeeds
-static bool          dispReady = false;
+// Rendering always targets an off-screen buffer (gfx); dispFlush() pushes it to
+// the physical panel (dispDev) in one shot so the panel never shows a partial
+// frame. Mono drivers buffer internally (gfx == dispDev). The SSD1351 has no RAM
+// buffer, so the colour path renders into dispCanvas and blits it whole — without
+// that it would flicker, clearing then redrawing live on the SPI bus each frame.
+static Adafruit_GFX* gfx        = nullptr;   // draw target (canvas for colour, device for mono)
+static Adafruit_GFX* dispDev    = nullptr;   // physical panel
+static GFXcanvas16*  dispCanvas = nullptr;   // off-screen buffer for the colour panel
+static bool          dispReady  = false;
 
 // Foreground "on" colour. Mono drivers want the 1-bit WHITE constant (==1);
 // the colour panel wants RGB565 white. Passing 0xFFFF to a mono driver draws
 // nothing (its drawPixel only matches 0/1/2), so the two must differ.
 static inline uint16_t dispFg() { return cfg.dispType == 4 ? 0xFFFF : 1; }
 
-// Push the RAM buffer to the panel. Mono drivers buffer and need display();
-// the SSD1351 draws straight over SPI, so there is nothing to flush.
 static void dispFlush() {
-    if (!gfx) return;
-    if (cfg.dispType == 3)      static_cast<Adafruit_SH1106G*>(gfx)->display();
-    else if (cfg.dispType != 4) static_cast<Adafruit_SSD1306*>(gfx)->display();
+    if (!dispDev) return;
+    if (cfg.dispType == 4)
+        static_cast<Adafruit_SSD1351*>(dispDev)->drawRGBBitmap(0, 0, dispCanvas->getBuffer(), 128, 128);
+    else if (cfg.dispType == 3)
+        static_cast<Adafruit_SH1106G*>(dispDev)->display();
+    else
+        static_cast<Adafruit_SSD1306*>(dispDev)->display();
 }
 
 static void dispSplash() {
@@ -431,23 +440,30 @@ static void initDisplay() {
     if (cfg.dispType <= 0) return;
 
     if (cfg.dispType == 4) {
-        // Colour SSD1351 over hardware SPI.
+        // Colour SSD1351 over hardware SPI. DC is mandatory; CS/RST may be -1.
+        if (cfg.dispDc < 0) { Serial.println("[DISP] SSD1351 needs a DC pin"); return; }
         if (cfg.dispSck >= 0 && cfg.dispMosi >= 0)
             SPI.begin(cfg.dispSck, -1, cfg.dispMosi, cfg.dispCs);
         Adafruit_SSD1351* d = new Adafruit_SSD1351(128, 128, &SPI,
                                   cfg.dispCs, cfg.dispDc, cfg.dispRst);
         d->begin();
-        gfx = d;
-    } else {
-        // Mono OLED over I2C — probe 0x3C then 0x3D.
-        if (cfg.dispSda >= 0 && cfg.dispScl >= 0) Wire.begin(cfg.dispSda, cfg.dispScl);
-        Wire.setClock(400000);
-        uint8_t addr = 0x3C;
-        Wire.beginTransmission(0x3C);
-        if (Wire.endTransmission() != 0) {
-            Wire.beginTransmission(0x3D);
-            if (Wire.endTransmission() == 0) addr = 0x3D;
+        dispCanvas = new GFXcanvas16(128, 128);
+        if (!dispCanvas->getBuffer()) {
+            delete d; delete dispCanvas; dispCanvas = nullptr;
+            Serial.println("[DISP] SSD1351 canvas alloc failed"); return;
         }
+        dispDev = d;
+        gfx     = dispCanvas;
+    } else {
+        // Mono OLED over I2C — probe 0x3C then 0x3D; bail if no panel answers.
+        if (cfg.dispSda >= 0 && cfg.dispScl >= 0) Wire.begin(cfg.dispSda, cfg.dispScl);
+        else                                      Wire.begin();
+        Wire.setClock(400000);
+        uint8_t addr = 0;
+        Wire.beginTransmission(0x3C);
+        if (Wire.endTransmission() == 0) addr = 0x3C;
+        else { Wire.beginTransmission(0x3D); if (Wire.endTransmission() == 0) addr = 0x3D; }
+        if (!addr) { Serial.println("[DISP] no I2C OLED found (0x3C/0x3D)"); return; }
         if (cfg.dispType == 3) {
             Adafruit_SH1106G* d = new Adafruit_SH1106G(128, 64, &Wire, -1);
             if (!d->begin(addr, true)) { delete d; Serial.println("[DISP] SH1106 init failed"); return; }
@@ -460,7 +476,8 @@ static void initDisplay() {
             if (!d->begin(SSD1306_SWITCHCAPVCC, addr, true, false)) { delete d; Serial.println("[DISP] SSD1306 init failed"); return; }
             gfx = d;
         }
-        Serial.printf("[DISP] I2C addr 0x%02X\n", addr);
+        dispDev = gfx;
+        Serial.printf("[DISP] I2C OLED at 0x%02X\n", addr);
     }
 
     gfx->setRotation(cfg.dispRot ? 2 : 0);

@@ -5,10 +5,10 @@ browser — IP, universe, frame rate, source count, link quality, and DMX activi
 and **auto-rotates to an alert banner** when something needs attention (two consoles
 fighting over the universe, identify, manual override).
 
-> Status: **design / Phase 1 (config plumbing) built**. Decisions locked here for review.
-> Two reference panels are in hand for bring-up:
-> - **Retoo 0.96″ 128×64 SH1106**, blue monochrome, **I²C** (`dispType 3`)
-> - **DollaTek 1.5″ 128×128 SSD1351**, full-color RGB, **SPI** (`dispType 4`)
+> Status: **implemented & committed** on the `hardware` branch (all four firmware envs build).
+> Mono bring-up panels ordered: Retoo SH1106 128×64, ARCELI SSD1306 128×64, MakerHawk SSD1306
+> 128×32 — covers `dispType 1/2/3`. Colour/SPI path (`dispType 4`) is built but on-hardware
+> verification is pending a panel (an SSD1351, or a TFT added per §7 on an existing display).
 
 ---
 
@@ -19,7 +19,7 @@ Two display classes, **one drawing API**:
 | Class | Controllers | Bus | Pins | Buffer | Boards |
 |---|---|---|---|---|---|
 | **Mono OLED** | SSD1306 (128×64, 128×32), SH1106 (128×64) | I²C | 2 | 1 KB | all four |
-| **Color OLED** | SSD1351 (128×128 RGB) | SPI | ~5 | direct-draw | esp32 / esp32-s3 only |
+| **Color OLED** | SSD1351 (128×128 RGB) | SPI | ~5 | 32 KB canvas | esp32 / esp32-s3 only |
 | Color TFT *(§7, later)* | ST7735 / ST7789 / ILI9341 | SPI | ~5 | direct-draw | esp32 / esp32-s3 only |
 
 **Library: the [Adafruit_GFX](https://github.com/adafruit/Adafruit-GFX-Library) family**
@@ -42,13 +42,13 @@ vs U8g2: no page-buffer low-RAM mode (mono keeps a 1 KB buffer — fine; we alre
 under 40 KB heap) and a smaller built-in font set (ample for a status screen).
 
 ```cpp
-Adafruit_GFX* gfx = nullptr;   // nullptr until initDisplay() if dispType>0
-uint8_t       dispFlush = 0;   // 0=none, 1=mono display(), 2=color direct (no-op)
+Adafruit_GFX* gfx = nullptr;   // draw target: device buffer (mono) or GFXcanvas16 (colour)
+// flush: mono -> dispDev->display();  colour -> dispDev->drawRGBBitmap(canvas->getBuffer())
 // factory (initDisplay):
-//   case 1: gfx = new Adafruit_SSD1306(128,64,&Wire,-1); ...->begin(SSD1306_SWITCHCAPVCC,addr);
-//   case 3: gfx = new Adafruit_SH1106G(128,64,&Wire,-1); ...->begin(addr,true);
-//   case 4: SPI.begin(sck,-1,mosi,cs);
-//           gfx = new Adafruit_SSD1351(128,128,&SPI,cs,dc,rst); ...->begin();
+//   case 1: gfx = dispDev = new Adafruit_SSD1306(128,64,&Wire,-1); ->begin(...,/*periphBegin*/false);
+//   case 3: gfx = dispDev = new Adafruit_SH1106G(128,64,&Wire,-1); ->begin(addr,true);
+//   case 4: SPI.begin(sck,-1,mosi,cs); dispDev = new Adafruit_SSD1351(128,128,&SPI,cs,dc,rst);
+//           dispDev->begin();  gfx = dispCanvas = new GFXcanvas16(128,128);
 ```
 
 The per-type `begin()` / flush differences live in the factory; the renderer is type-agnostic.
@@ -133,9 +133,10 @@ displayTask():  pick screen (priority, §5) → render via Adafruit_GFX* → flu
   `gfx == nullptr` (no hang — I²C `begin()` NAK-times out; SPI begin always returns).
 - Boot sequence on the panel: **"LumiGate vX.Y.Z"** splash → **"Connecting…"** → status once
   `netConnected()`.
-- Color path is **direct-draw** (Adafruit_SSD1351 keeps no full canvas → low RAM). To avoid
-  flicker the status renderer erases+redraws only the text rect that changed, not the whole
-  screen.
+- Color path is **double-buffered**: the renderer draws into a `GFXcanvas16` (32 KB, allocated
+  only when `dispType == 4`) and `dispFlush()` blits the whole frame with one `drawRGBBitmap()`.
+  The SSD1351 has no RAM buffer, so without this it would visibly flicker — clearing then
+  redrawing live on the SPI bus. Mono panels buffer internally, so they flush with `display()`.
 
 ---
 
@@ -236,12 +237,15 @@ cases + a larger-font layout. Out of scope for issue #5's first cut.
 
 ---
 
-## 9. Build phases
+## 9. Build phases — all implemented
 
-1. ✅ **Config plumbing (mono I²C)** — `Config` fields, NVS, `handleConfigPost`, `handleInfoJson`,
-   `/config` "Display" card + JS. (`dispType 0–3` + SDA/SCL/rot; `/info.json` round-trips them)
-2. Library swap to Adafruit_GFX family; `initDisplay()` factory + I²C probe + splash; add
-   `dispType 4` (SSD1351) + SPI config keys; per-board `DEF_DISP_*`.
-3. `displayTask()` + status screen (height-aware mono + color layouts).
-4. Auto-rotate banners (conflict / identify / manual) with priority + dwell; color status palette.
-5. Wokwi `diagram.json` SSD1306 + README "Display" section.
+1. ✅ Config plumbing — `Config` fields, NVS, `handleConfigPost`, `handleInfoJson`, `/config`
+   "Display" card + JS; `/info.json` round-trips `dispType` + I²C/SPI pins + rotation.
+2. ✅ Adafruit_GFX family; `initDisplay()` factory + I²C probe (bails if no panel) + DC-pin guard
+   + boot splash; `dispType 4` (SSD1351) with a `GFXcanvas16` double-buffer; per-board `DEF_DISP_*`.
+3. ✅ `displayTask()` + status screen (height-aware 128×32 / 128×64 / 128×128 hero layouts).
+4. ✅ Auto-rotate banners (conflict / identify / manual) with priority + dwell; colour status palette.
+5. ✅ Wokwi `diagram.json` SSD1306 + README "Display" section + rendered `display-preview.png`.
+
+**Remaining:** on-hardware bring-up of the mono panels and the colour/SPI path; optional §7 TFT
+support (verify colour/SPI on an existing TFT instead of buying an SSD1351).
