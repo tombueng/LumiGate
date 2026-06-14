@@ -1,0 +1,3 @@
+(fp_lib_table
+  (lib (name "LumiGate")(type "KiCad")(uri "${KIPRJMOD}/LumiGate.pretty")(options "")(descr "LumiGate project footprints (ESP32-POE-ISO socket)"))
+)

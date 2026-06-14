@@ -57,6 +57,20 @@ A guided tour of every control — manual channel control, labels, sparkline his
 
 ## Hardware
 
+> ### 🛠 Custom PCB — LumiGate v3
+>
+> Want the real thing instead of breadboard + modules? There's a complete **open-source 4-layer PCB**:
+> ESP32-S3 with **both WiFi and wired Ethernet** (W5500), **galvanically-isolated DMX** output,
+> USB-C power + flashing, status LEDs, BOOT/RST buttons, and an optional OLED/TFT display header —
+> all palm-sized and fabricable at JLCPCB for a few dollars.
+>
+> [<img src="hardware/board3d-1.png" width="360" alt="LumiGate v3 custom PCB">](hardware/README.md)
+>
+> **→ Full design, component rationale, BOM, gerbers & JLCPCB fab guide: [`hardware/`](hardware/README.md)**
+
+The rest of this section covers the simpler **breadboard / module** build (an off-the-shelf ESP32 DevKit
++ an isolated RS485 module) — perfect for getting started without fabricating a board.
+
 ### Bill of Materials — WiFi build (ESP32 / ESP32-S3)
 
 | # | Component | Description | Link |

@@ -5,3 +5,13 @@ docs/video-raw/
 docs/demo.mp4
 docs/test-results/
 docs/playwright-report/
+
+# local editor/agent config (never publish)
+.claude/
+.vscode/
+.history/
+# stray SKiDL byproducts if lumigate.py is run from repo root
+/lumigate.erc
+/lumigate.log
+/lumigate*_sklib.py
+/lumigate*.kicad_prl
